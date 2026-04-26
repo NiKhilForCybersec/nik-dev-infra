@@ -112,6 +112,17 @@ export const AccessibilityFindingSchema = Base.extend({
   ]),
 });
 
+export const McpFindingSchema = Base.extend({
+  kind: z.enum([
+    'mcp:not-configured',
+    'mcp:tool-added',
+    'mcp:tool-removed',
+    'mcp:server-down',
+    'mcp:server-recovered',
+    'mcp:summary',
+  ]),
+});
+
 export const MemoryKeeperFindingSchema = Base.extend({
   kind: z.enum([
     'memory:orphan-fact-subject',
@@ -160,6 +171,7 @@ export const SCHEMA_BY_AGENT = {
   secrets: SecretsFindingSchema,
   accessibility: AccessibilityFindingSchema,
   'memory-keeper': MemoryKeeperFindingSchema,
+  mcp: McpFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;

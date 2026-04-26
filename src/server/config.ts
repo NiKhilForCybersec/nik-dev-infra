@@ -48,6 +48,13 @@ const ConfigSchema = z.object({
   backendDirs: z.array(z.string()),
   /** Globs containing frontend code to scan for fetch() calls + LLM SDK imports. */
   frontendGlobs: z.array(z.string()),
+  /** MCP servers the dev-infra should introspect. Each is a JSON-RPC
+   *  over HTTP endpoint that responds to the `tools/list` method. */
+  mcpServers: z.array(z.object({
+    name: z.string().min(1),
+    url: z.string().url(),
+    headers: z.record(z.string()).optional(),
+  })),
   /** Concerns markdown file, relative to targetPath. */
   concernsFile: z.string(),
   /** CLAUDE.md file, relative to targetPath. */
@@ -76,6 +83,7 @@ const DEFAULT_CONFIG: DevInfraConfig = {
   migrationsGlob: 'supabase/migrations/*.sql',
   backendDirs: ['supabase/functions', 'app/api', 'pages/api', 'src/api', 'src/server', 'server'],
   frontendGlobs: ['web/src/**/*.{ts,tsx}', 'src/**/*.{ts,tsx}'],
+  mcpServers: [],
   concernsFile: 'docs/Concerns.md',
   claudeMdFile: 'CLAUDE.md',
   agentsToEnable: null,
