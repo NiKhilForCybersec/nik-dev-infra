@@ -59,6 +59,16 @@ export const DatabaseFindingSchema = Base.extend({
   ]),
 });
 
+export const HealthFindingSchema = Base.extend({
+  kind: z.enum([
+    'health:up',
+    'health:degraded',
+    'health:down',
+    'health:summary',
+    'health:no-targets',
+  ]),
+});
+
 export type RawFinding = z.infer<typeof Base>;
 
 export const SCHEMA_BY_AGENT = {
@@ -67,6 +77,7 @@ export const SCHEMA_BY_AGENT = {
   navigation: NavigationFindingSchema,
   registry: RegistryFindingSchema,
   database: DatabaseFindingSchema,
+  health: HealthFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;
