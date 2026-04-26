@@ -59,12 +59,27 @@ const CLAUDE_MD_SENTINEL_BEGIN = '<!-- nik-dev-infra:concerns-gate -->';
 const CLAUDE_MD_SENTINEL_END   = '<!-- /nik-dev-infra:concerns-gate -->';
 
 function gateBlock(): string {
+  // Three instructions for the user's Claude Code session, per
+  // project_concerns_resolutions_pattern memory:
+  //   1. Read Concerns.md before any code change.
+  //   2. After fixing a concern, log a Resolutions.md entry referencing
+  //      it + the file:line you changed + (if UI) the screenshot path.
+  //   3. After editing any *Screen.tsx, save the current screenshot at
+  //      docs/screenshots/<X>.png so dev-infra renders the live view
+  //      AND the curator can verify UI resolutions visually.
   return `${CLAUDE_MD_SENTINEL_BEGIN}
-## Concerns from nik-dev-infra
+## nik-dev-infra workflow
 
-Before any code change, read [\`${config.concernsFile}\`](${config.concernsFile}) for issues
-surfaced by nik-dev-infra. After editing any \`*Screen.tsx\`, save a current screenshot at
-\`${config.screenshotsDir}/<ScreenName>.png\` so the dev-infra dashboard can render the live view.
+This project is monitored by [nik-dev-infra](https://github.com/NiKhilForCybersec/nik-dev-infra).
+Three rules for any Claude Code session working in this repo:
+
+1. **Before any code change**, read [\`${config.concernsFile}\`](${config.concernsFile}) for unresolved issues. If the user surfaces a new concern in chat, append it to that file as a markdown bullet with a 1-2 sentence description.
+
+2. **After fixing a concern**, append a heading + bullet entry to [\`${config.resolutionsFile}\`](${config.resolutionsFile}) with: timestamp, the concern you addressed (quote the bullet), the file:line you changed, and (for UI fixes) the screenshot path. The dev-infra curator audits Resolutions.md against the actual code — claimed fixes get verified, lazy / cosmetic fixes get re-flagged.
+
+3. **After editing any \`*Screen.tsx\`**, save a current screenshot at \`${config.screenshotsDir}/<ScreenName>.png\` so the dev-infra dashboard renders the live view AND the curator has visual proof of UI resolutions.
+
+The dev-infra dashboard at http://localhost:5174 shows live findings. Hard-path discipline — every flag is grounded in code; below 100% confidence stays private.
 ${CLAUDE_MD_SENTINEL_END}
 `;
 }
@@ -422,6 +437,24 @@ export const curatorAgent: Agent = {
           summary: `${config.concernsFile} is empty — nothing to audit`,
         });
       } else {
+        // Resolutions.md (D.5.6) — Claude session's claimed fixes;
+        // optional sibling to Concerns.md. The curator cross-checks
+        // each resolution against the actual code via the prompt.
+        const resolutionsPath = resolve(config.targetPath, config.resolutionsFile);
+        let resolutionsBody = '';
+        if (existsSync(resolutionsPath)) {
+          try { resolutionsBody = readFileSync(resolutionsPath, 'utf8'); } catch { /* */ }
+        } else {
+          out.push({
+            id: newId(),
+            agent: 'curator',
+            kind: 'curator:audit-no-resolutions-file',
+            at: now,
+            severity: 'info',
+            summary: `${config.resolutionsFile} not present — Claude session hasn't logged any fixes yet`,
+          });
+        }
+
         const auditPrompt = `${AUDIT_PROMPT_BASE}
 
 ---
@@ -431,7 +464,14 @@ export const curatorAgent: Agent = {
 \`\`\`markdown
 ${concernsBody.slice(0, 12_000)}
 \`\`\`
-`;
+${resolutionsBody.trim().length > 0 ? `
+
+## Input — current contents of ${config.resolutionsFile}
+
+\`\`\`markdown
+${resolutionsBody.slice(0, 12_000)}
+\`\`\`
+` : ''}`;
         try {
           const r = await runClaude({ prompt: auditPrompt, timeoutMs: 180_000 });
           const raw = parseJsonArray<unknown>(r.text);

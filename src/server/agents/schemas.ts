@@ -157,6 +157,7 @@ export const DocIngestFindingSchema = Base.extend({
   ]),
 });
 
+
 export const ProberFindingSchema = Base.extend({
   kind: z.enum([
     'prober:up',
