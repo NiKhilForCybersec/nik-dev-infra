@@ -45,6 +45,8 @@ export function App() {
   const [connected, setConnected] = useState(false);
   const [filterAgent, setFilterAgent] = useState<string>('all');
   const [filterSev, setFilterSev] = useState<'all' | Severity>('all');
+  const [lastLiveAt, setLastLiveAt] = useState<number | null>(null);
+  const [liveCount, setLiveCount] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -62,8 +64,11 @@ export function App() {
             setAgents(msg.agents);
           } else if (msg.type === 'finding') {
             setFindings((prev) => [...prev, msg.finding].slice(-1000));
+            setLastLiveAt(Date.now());
+            setLiveCount((n) => n + 1);
           } else if (msg.type === 'run') {
             setRuns((prev) => [...prev, msg.run].slice(-200));
+            setLastLiveAt(Date.now());
           }
         } catch { /* ignore */ }
       };
@@ -97,6 +102,8 @@ export function App() {
 
   const recentRuns = useMemo(() => runs.slice().reverse().slice(0, 8), [runs]);
 
+  const livePulse = lastLiveAt !== null && Date.now() - lastLiveAt < 1500;
+
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
@@ -107,9 +114,21 @@ export function App() {
           </div>
           <div style={{ fontSize: 22, fontWeight: 600, marginTop: 2 }}>Live agent findings</div>
         </div>
-        <div className="mono" style={{ fontSize: 11, color: connected ? 'var(--ok)' : 'var(--err)', display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: connected ? 'var(--ok)' : 'var(--err)', boxShadow: connected ? '0 0 6px var(--ok)' : 'none' }} />
+        <div className="mono" style={{ fontSize: 11, color: connected ? 'var(--ok)' : 'var(--err)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span
+            className={livePulse ? 'live-pulse' : ''}
+            style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: connected ? 'var(--ok)' : 'var(--err)',
+              boxShadow: connected ? '0 0 6px var(--ok)' : 'none',
+            }}
+          />
           {connected ? 'CONNECTED · WS' : 'RECONNECTING…'}
+          {connected && lastLiveAt !== null && (
+            <span style={{ color: 'var(--fg-3)', marginLeft: 4 }}>
+              · {liveCount} live event{liveCount === 1 ? '' : 's'}
+            </span>
+          )}
         </div>
       </div>
 

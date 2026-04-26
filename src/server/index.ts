@@ -25,8 +25,11 @@ app.get('/api/snapshot', async () => {
 });
 
 // WebSocket: live feed.
+let wsClients = 0;
 app.register(async (instance) => {
   instance.get('/ws', { websocket: true }, (socket /* WebSocket */) => {
+    wsClients++;
+    app.log.info(`[ws] client connected · ${wsClients} active`);
     const send = (e: ServerEvent) => {
       try { socket.send(JSON.stringify(e)); } catch { /* socket may be closed */ }
     };
@@ -37,9 +40,19 @@ app.register(async (instance) => {
       ...snap,
       agents: AGENTS.map((a) => ({ name: a.name, description: a.description })),
     } as ServerEvent);
-    const off1 = onFinding((finding) => send({ type: 'finding', finding }));
-    const off2 = onRun((run) => send({ type: 'run', run }));
-    socket.on('close', () => { off1(); off2(); });
+    const off1 = onFinding((finding) => {
+      app.log.info(`[ws] finding → ${wsClients} client(s) · ${finding.agent}/${finding.kind}`);
+      send({ type: 'finding', finding });
+    });
+    const off2 = onRun((run) => {
+      app.log.info(`[ws] run → ${wsClients} client(s) · ${run.agent} · ${run.ok ? 'ok' : 'fail'} · ${run.findingCount}f/${run.durationMs}ms`);
+      send({ type: 'run', run });
+    });
+    socket.on('close', () => {
+      wsClients--;
+      app.log.info(`[ws] client disconnected · ${wsClients} active`);
+      off1(); off2();
+    });
   });
 });
 

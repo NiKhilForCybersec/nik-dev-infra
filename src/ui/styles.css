@@ -45,3 +45,10 @@ button:hover { border-color: var(--hairline-strong); }
 
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
+
+@keyframes live-pulse-kf {
+  0%   { transform: scale(1);   box-shadow: 0 0 0 0 var(--ok); }
+  50%  { transform: scale(1.6); box-shadow: 0 0 8px 2px var(--ok); }
+  100% { transform: scale(1);   box-shadow: 0 0 0 0 var(--ok); }
+}
+.live-pulse { animation: live-pulse-kf 1.2s ease-out; }

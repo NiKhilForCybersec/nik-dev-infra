@@ -9,7 +9,8 @@
     "daemon": "tsx watch src/server/index.ts",
     "ui": "vite",
     "build": "tsc -b && vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify:ws": "node scripts/verify-ws.mjs"
   },
   "dependencies": {
     "chokidar": "^4.0.3",
