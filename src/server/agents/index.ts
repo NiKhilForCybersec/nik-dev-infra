@@ -2,6 +2,7 @@
  *  files in this dir + add an entry below. */
 
 import type { Agent } from '../types.ts';
+import { concernsAgent } from './concerns.ts';
 import { databaseAgent } from './database.ts';
 import { driftAgent } from './drift.ts';
 import { hardcodedAgent } from './hardcoded.ts';
@@ -16,4 +17,5 @@ export const AGENTS: Agent[] = [
   navigationAgent,  // claude -p
   hardcodedAgent,   // claude -p
   databaseAgent,    // claude -p (high reasoning; rare runs)
+  concernsAgent,    // claude -p (small) — reads docs/Concerns.md
 ];
