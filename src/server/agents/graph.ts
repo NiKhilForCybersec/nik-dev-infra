@@ -322,35 +322,112 @@ export const graphAgent: Agent = {
       return walk(abs, (f) => /\.(ts|tsx|js|mjs)$/.test(f));
     });
 
+    // Transitive attribution prep: for every *Screen.tsx, scan its
+    // top-of-file relative imports and resolve each to an absolute path.
+    // We then build a reverse map: file → set<screenURN that imports it>.
+    // When a non-Screen file contains fetch() / LLM SDK imports, the
+    // edges get attributed to every screen that imports it (directly or
+    // through one hop). Hard-path: only one hop and only relative imports
+    // (../foo), not bare module names — we never assume what an
+    // unresolved bare import does.
+    const importsByFile = new Map<string, Set<string>>();   // absFile → relative imports it issues
+    function resolveImport(fromAbs: string, spec: string): string | null {
+      if (!spec.startsWith('.')) return null;
+      const baseDir = dirname(fromAbs);
+      // Order matters: resolve to file extensions BEFORE checking the
+      // bare path, otherwise a directory gets returned and the next
+      // readFileSync explodes (EISDIR). Each candidate is only accepted
+      // if it exists AND is a regular file.
+      const candidates = [
+        resolve(baseDir, spec + '.ts'),
+        resolve(baseDir, spec + '.tsx'),
+        resolve(baseDir, spec + '.js'),
+        resolve(baseDir, spec + '.mjs'),
+        resolve(baseDir, spec, 'index.ts'),
+        resolve(baseDir, spec, 'index.tsx'),
+        resolve(baseDir, spec, 'index.js'),
+        resolve(baseDir, spec),
+      ];
+      for (const c of candidates) {
+        if (!existsSync(c)) continue;
+        try { if (statSync(c).isFile()) return c; } catch { continue; }
+      }
+      return null;
+    }
+    function fileImports(absFile: string, src: string): Set<string> {
+      const out = new Set<string>();
+      // import ... from '...'  AND  export ... from '...'  AND  bare side-effect import '...'
+      const re = /\b(?:import|export)(?:[\s\S]*?from\s+|\s+)?['"]([^'"]+)['"]/g;
+      for (const m of src.matchAll(re)) {
+        const r = resolveImport(absFile, m[1]!);
+        if (r) out.add(r);
+      }
+      return out;
+    }
+    // Pass A: index every screen's imports.
+    const importedByScreen = new Map<string, Set<string>>();   // screenURN → abs files
+    for (const file of screenFiles) {
+      let src: string;
+      try { src = readFileSync(file, 'utf8'); } catch { continue; }
+      const screenName = basename(file).replace(/\.tsx$/, '');
+      const screenId = `screen:${screenName}`;
+      const imps = fileImports(file, src);
+      importsByFile.set(file, imps);
+      importedByScreen.set(screenId, imps);
+    }
+    // Reverse map: file → screens that import it (directly).
+    const screensImporting = new Map<string, Set<string>>();
+    for (const [screenId, files] of importedByScreen) {
+      for (const f of files) {
+        const set = screensImporting.get(f) ?? new Set<string>();
+        set.add(screenId);
+        screensImporting.set(f, set);
+      }
+    }
+    // Pass B: also follow each imported file's own imports (one more hop).
+    for (const f of [...screensImporting.keys()]) {
+      let src: string;
+      try { src = readFileSync(f, 'utf8'); } catch { continue; }
+      const next = fileImports(f, src);
+      const ownerScreens = screensImporting.get(f)!;
+      for (const n of next) {
+        const cur = screensImporting.get(n) ?? new Set<string>();
+        for (const s of ownerScreens) cur.add(s);
+        screensImporting.set(n, cur);
+      }
+    }
+
     const fetchedEndpoints = new Map<string, Set<string>>();   // screenId → endpoint URN set
-    const llmInvocations = new Map<string, Set<{ provider: string; line: number; file: string }>>();
+    const llmInvocations = new Map<string, Set<string>>();      // screenId → providers
+
+    function attributeScreens(absFile: string): string[] {
+      // Direct: file IS a Screen file.
+      const m = /([A-Z]\w*Screen)\.tsx$/.exec(rel(absFile));
+      if (m) return [`screen:${m[1]!}`];
+      // Transitive: any screen that (transitively) imports this file.
+      const set = screensImporting.get(absFile);
+      return set ? [...set] : [];
+    }
 
     for (const file of frontendFiles) {
       let src: string;
       try { src = readFileSync(file, 'utf8'); } catch { continue; }
       const fileRel = rel(file);
-
-      // Best-effort attribution: if this file is a *Screen.tsx, attribute
-      // findings to that screen. Otherwise we still emit a fact but skip
-      // the screen→endpoint edge (we can't be 100% sure which screen).
-      const screenMatch = /([A-Z]\w*Screen)\.tsx$/.exec(fileRel);
-      const screenId = screenMatch ? `screen:${screenMatch[1]}` : null;
+      const owners = attributeScreens(file);
 
       // fetch('/path' OR `${BASE}/...`)
       for (const m of src.matchAll(/\bfetch\s*\(\s*[`'"]([^`'"]+)[`'"]/g)) {
         const url = m[1]!;
-        // Normalize: keep only the path part, strip protocol+host
         const path = url.replace(/^https?:\/\/[^/]+/, '').replace(/^\$\{[^}]+\}/, '');
-        if (!path.startsWith('/')) continue;        // skip non-path strings
+        if (!path.startsWith('/')) continue;
         const urn = `endpoint:${path}`;
         addNode({ id: urn, type: 'endpoint', label: path });
-        if (screenId) {
-          if (!fetchedEndpoints.get(screenId)?.has(urn)) {
-            const set = fetchedEndpoints.get(screenId) ?? new Set<string>();
-            set.add(urn);
-            fetchedEndpoints.set(screenId, set);
-            addEdge({ from: screenId, to: urn, kind: 'calls', file: fileRel, line: lineAt(src, m.index!) });
-          }
+        for (const screenId of owners) {
+          const seen = fetchedEndpoints.get(screenId) ?? new Set<string>();
+          if (seen.has(urn)) continue;
+          seen.add(urn);
+          fetchedEndpoints.set(screenId, seen);
+          addEdge({ from: screenId, to: urn, kind: 'calls', file: fileRel, line: lineAt(src, m.index!) });
         }
       }
 
@@ -361,13 +438,12 @@ export const graphAgent: Agent = {
         if (!m) continue;
         const providerUrn = `llm_provider:${provider}`;
         addNode({ id: providerUrn, type: 'llm_provider', label: provider });
-        if (screenId) {
-          const set = llmInvocations.get(screenId) ?? new Set();
-          if (![...set].some((x) => x.provider === provider)) {
-            set.add({ provider, line: lineAt(src, m.index!), file: fileRel });
-            llmInvocations.set(screenId, set);
-            addEdge({ from: screenId, to: providerUrn, kind: 'invokes_llm', file: fileRel, line: lineAt(src, m.index!) });
-          }
+        for (const screenId of owners) {
+          const seen = llmInvocations.get(screenId) ?? new Set<string>();
+          if (seen.has(provider)) continue;
+          seen.add(provider);
+          llmInvocations.set(screenId, seen);
+          addEdge({ from: screenId, to: providerUrn, kind: 'invokes_llm', file: fileRel, line: lineAt(src, m.index!) });
         }
       }
     }
