@@ -18,6 +18,8 @@
     "@fastify/websocket": "^11.0.2",
     "better-sqlite3": "^12.9.0",
     "chokidar": "^4.0.3",
+    "cytoscape": "^3.33.2",
+    "cytoscape-fcose": "^2.2.0",
     "execa": "^9.5.2",
     "fastify": "^5.2.1",
     "minimatch": "^10.0.1",
@@ -27,6 +29,7 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/cytoscape": "^3.21.9",
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",

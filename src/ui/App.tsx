@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AgentMetrics } from './AgentMetrics';
 import { GraphPanel } from './GraphPanel';
+import { GraphPlayground } from './GraphPlayground';
 
 type Severity = 'info' | 'warn' | 'error';
 
@@ -51,6 +52,7 @@ export function App() {
   const [lastLiveAt, setLastLiveAt] = useState<number | null>(null);
   const [liveCount, setLiveCount] = useState(0);
   const [graphOpen, setGraphOpen] = useState(false);
+  const [playgroundOpen, setPlaygroundOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -129,10 +131,15 @@ export function App() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <button
+            onClick={() => setPlaygroundOpen(true)}
+            className="mono"
+            style={{ padding: '4px 10px', fontSize: 10, letterSpacing: 1, color: 'var(--accent)', borderColor: 'var(--accent)' }}
+          >PLAYGROUND</button>
+          <button
             onClick={() => setGraphOpen(true)}
             className="mono"
             style={{ padding: '4px 10px', fontSize: 10, letterSpacing: 1, color: 'var(--fg-2)' }}
-          >GRAPH</button>
+          >GRAPH (LIST)</button>
           <div className="mono" style={{ fontSize: 11, color: connected ? 'var(--ok)' : 'var(--err)', display: 'flex', alignItems: 'center', gap: 8 }}>
             <span
               className={livePulse ? 'live-pulse' : ''}
@@ -238,6 +245,7 @@ export function App() {
       </div>
 
       {graphOpen && <GraphPanel onClose={() => setGraphOpen(false)} />}
+      {playgroundOpen && <GraphPlayground onClose={() => setPlaygroundOpen(false)} />}
     </div>
   );
 }
