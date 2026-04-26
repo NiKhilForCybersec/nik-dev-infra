@@ -79,6 +79,16 @@ function scheduleAgent(agent: Agent, debounceMs = 800) {
   }, debounceMs));
 }
 
+/** Manually trigger a single agent by name. Returns ok=false if the
+ *  name is unknown. Useful for manual one-shots like the bootstrap pass
+ *  or any agent the user wants to re-run from the dashboard. */
+export function triggerAgent(name: string): { ok: boolean; reason?: string } {
+  const a = AGENTS.find((x) => x.name === name);
+  if (!a) return { ok: false, reason: `unknown agent: ${name}` };
+  void runAgent(a);
+  return { ok: true };
+}
+
 export function startOrchestrator(): void {
   // 1. Initial run of every agent on boot (so the UI has data immediately).
   for (const a of AGENTS) void runAgent(a);

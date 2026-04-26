@@ -112,6 +112,14 @@ export const AccessibilityFindingSchema = Base.extend({
   ]),
 });
 
+export const BootstrapFindingSchema = Base.extend({
+  kind: z.enum([
+    'bootstrap:start',
+    'bootstrap:complete',
+    'bootstrap:no-source',
+  ]),
+});
+
 export const McpFindingSchema = Base.extend({
   kind: z.enum([
     'mcp:not-configured',
@@ -172,6 +180,7 @@ export const SCHEMA_BY_AGENT = {
   accessibility: AccessibilityFindingSchema,
   'memory-keeper': MemoryKeeperFindingSchema,
   mcp: McpFindingSchema,
+  bootstrap: BootstrapFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;

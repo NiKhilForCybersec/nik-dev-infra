@@ -10,7 +10,7 @@ import { AGENTS } from './agents/index.ts';
 import { config } from './config.ts';
 import { onFinding, onRun, snapshot } from './findings.ts';
 import { entities, factsByPredicate, listHooks, listSegments, memoryStats, query, recallAll, wikiHistory, wikiList, wikiRead } from './memory.ts';
-import { startOrchestrator } from './orchestrator.ts';
+import { startOrchestrator, triggerAgent } from './orchestrator.ts';
 import type { ServerEvent } from './types.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -95,6 +95,17 @@ app.get<{ Querystring: { segment?: string; topic?: string; history?: string } }>
     return { page, revisions: wikiHistory(seg, topic) };
   }
   return { page };
+});
+
+// REST: manually trigger an agent by name. Useful for the bootstrap
+// pass and any agent the user wants to re-run on demand.
+app.post<{ Params: { name: string } }>('/api/agents/:name/run', async (req, reply) => {
+  const r = triggerAgent(req.params.name);
+  if (!r.ok) {
+    reply.code(404);
+    return { error: r.reason };
+  }
+  return { ok: true };
 });
 
 // REST: project topology graph (built by the graph agent).
