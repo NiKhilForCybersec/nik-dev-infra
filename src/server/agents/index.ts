@@ -11,6 +11,7 @@ import { graphAgent } from './graph.ts';
 import { hardcodedAgent } from './hardcoded.ts';
 import { healthAgent } from './health.ts';
 import { llmCostAgent } from './llm-cost.ts';
+import { memoryKeeperAgent } from './memory-keeper.ts';
 import { navigationAgent } from './navigation.ts';
 import { registryAgent } from './registry.ts';
 import { secretsAgent } from './secrets.ts';
@@ -23,6 +24,7 @@ export const ALL_AGENTS: Agent[] = [
   graphAgent,           // deterministic — builds topology JSON
   llmCostAgent,         // deterministic — tails Supabase llm_calls table
   secretsAgent,         // deterministic — regex scan for committed secrets
+  memoryKeeperAgent,    // deterministic — owner of the memory layer's integrity
   driftAgent,           // claude -p
   navigationAgent,      // claude -p
   hardcodedAgent,       // claude -p

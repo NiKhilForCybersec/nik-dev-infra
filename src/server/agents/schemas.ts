@@ -112,6 +112,21 @@ export const AccessibilityFindingSchema = Base.extend({
   ]),
 });
 
+export const MemoryKeeperFindingSchema = Base.extend({
+  kind: z.enum([
+    'memory:orphan-fact-subject',
+    'memory:orphan-fact-object',
+    'memory:orphan-hook',
+    'memory:orphan-wiki',
+    'memory:low-confidence-facts',
+    'memory:revisions-pruned',
+    'memory:vacuum',
+    'memory:vacuum-failed',
+    'memory:completeness',
+    'memory:integrity-summary',
+  ]),
+});
+
 export const SecretsFindingSchema = Base.extend({
   kind: z.enum([
     'secrets:anthropic',
@@ -144,6 +159,7 @@ export const SCHEMA_BY_AGENT = {
   sync: SyncFindingSchema,
   secrets: SecretsFindingSchema,
   accessibility: AccessibilityFindingSchema,
+  'memory-keeper': MemoryKeeperFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;

@@ -599,3 +599,28 @@ export function query<T = unknown>(sql: string, params: unknown[] = []): T[] {
   }
   return db.prepare(sql).all(...params) as T[];
 }
+
+const deleteOldRevisions = db.prepare(`
+  DELETE FROM wiki_revisions
+  WHERE id IN (
+    SELECT id FROM wiki_revisions
+    WHERE segment = ? AND topic = ?
+    ORDER BY at DESC
+    LIMIT -1 OFFSET ?
+  )
+`);
+
+/** Prune wiki_revisions for a (segment, topic) pair down to `keepN` most
+ *  recent rows. Used by the memory-keeper agent to bound history growth. */
+export function pruneRevisions(segment: string, topic: string, keepN: number): number {
+  const r = deleteOldRevisions.run(segment, topic, keepN);
+  return Number(r.changes);
+}
+
+const sqliteVacuum = db.prepare('VACUUM');
+
+/** Compact the underlying SQLite file. Slow-ish (full rewrite); the
+ *  memory-keeper schedules it sparingly. */
+export function vacuum(): void {
+  sqliteVacuum.run();
+}
