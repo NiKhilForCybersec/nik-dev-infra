@@ -746,6 +746,16 @@ export function setPhase(p: SystemPhase): void {
   note('system', 'phase', p);
 }
 
+/** Atomically snapshot the live memory.db to `targetPath`. Uses
+ *  better-sqlite3's online backup API — doesn't lock the active db,
+ *  doesn't require WAL checkpoint, safe to run while agents are
+ *  emitting. Returns the snapshot file size in bytes. */
+export async function backupTo(targetPath: string): Promise<number> {
+  await db.backup(targetPath);
+  try { return (await import('node:fs')).statSync(targetPath).size; }
+  catch { return 0; }
+}
+
 const sqliteVacuum = db.prepare('VACUUM');
 
 /** Compact the underlying SQLite file. Slow-ish (full rewrite); the

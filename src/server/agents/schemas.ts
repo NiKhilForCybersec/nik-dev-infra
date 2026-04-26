@@ -221,6 +221,14 @@ export const ScreenshotsFindingSchema = Base.extend({
   ]),
 });
 
+export const SnapshotterFindingSchema = Base.extend({
+  kind: z.enum([
+    'snapshot:created',
+    'snapshot:pruned',
+    'snapshot:failed',
+  ]),
+});
+
 export const OrchestratorFindingSchema = Base.extend({
   kind: z.enum([
     'hooks:fired',
@@ -297,6 +305,7 @@ export const SCHEMA_BY_AGENT = {
   bootstrap: BootstrapFindingSchema,
   orchestrator: OrchestratorFindingSchema,
   screenshots: ScreenshotsFindingSchema,
+  snapshotter: SnapshotterFindingSchema,
   curator: CuratorFindingSchema,
   bindings: BindingsFindingSchema,
   'ai-coverage': AiCoverageFindingSchema,
