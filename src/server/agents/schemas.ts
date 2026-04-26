@@ -221,6 +221,21 @@ export const ScreenshotsFindingSchema = Base.extend({
   ]),
 });
 
+export const ScreenValidatorFindingSchema = Base.extend({
+  kind: z.enum([
+    'capture:ok',
+    'capture:blank',
+    'capture:auth-wall',
+    'capture:skeleton-loading',
+    'capture:error-state',
+    'capture:network-pending',
+    'capture:scroll-required',
+    'capture:no-capture',
+    'capture:failed-nav',
+    'capture:summary',
+  ]),
+});
+
 export const SnapshotterFindingSchema = Base.extend({
   kind: z.enum([
     'snapshot:created',
@@ -306,6 +321,7 @@ export const SCHEMA_BY_AGENT = {
   bootstrap: BootstrapFindingSchema,
   orchestrator: OrchestratorFindingSchema,
   screenshots: ScreenshotsFindingSchema,
+  'screen-validator': ScreenValidatorFindingSchema,
   snapshotter: SnapshotterFindingSchema,
   curator: CuratorFindingSchema,
   bindings: BindingsFindingSchema,
