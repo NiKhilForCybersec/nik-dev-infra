@@ -50,6 +50,15 @@ export const RegistryFindingSchema = Base.extend({
   ]),
 });
 
+export const DatabaseFindingSchema = Base.extend({
+  kind: z.enum([
+    'db:column-mismatch',
+    'db:type-mismatch',
+    'db:missing-rls',
+    'db:missing-index',
+  ]),
+});
+
 export type RawFinding = z.infer<typeof Base>;
 
 export const SCHEMA_BY_AGENT = {
@@ -57,6 +66,7 @@ export const SCHEMA_BY_AGENT = {
   hardcoded: HardcodedFindingSchema,
   navigation: NavigationFindingSchema,
   registry: RegistryFindingSchema,
+  database: DatabaseFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;
