@@ -1,5 +1,7 @@
 # nik-dev-infra
 
+[![ci](https://github.com/NiKhilForCybersec/nik-dev-infra/actions/workflows/ci.yml/badge.svg)](https://github.com/NiKhilForCybersec/nik-dev-infra/actions/workflows/ci.yml)
+
 Always-on dev infrastructure for the [Nik app](../NIK). Runs a long-lived Node daemon that watches the Nik codebase and spawns parallel `claude -p` agents on every change. Findings stream live to a React console at http://localhost:5174.
 
 Cost: covered by Claude Max subscription. No per-token billing.
