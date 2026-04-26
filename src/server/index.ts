@@ -45,6 +45,47 @@ function latestCompleteness(): {
   } catch { return null; }
 }
 
+// REST: setup — read + write dev-infra.config.json so users can
+// re-target the watched repo from the dashboard without editing the
+// JSON by hand. Daemon restart required for new config to take effect.
+const CONFIG_FILE_PATH = resolve(here, '../../dev-infra.config.json');
+
+app.get('/api/config', async () => {
+  const fs = await import('node:fs');
+  const hasUserConfig = fs.existsSync(CONFIG_FILE_PATH);
+  return {
+    target: { path: config.targetPath, label: config.targetLabel },
+    screenshotsDir: config.screenshotsDir,
+    concernsFile: config.concernsFile,
+    resolutionsFile: config.resolutionsFile,
+    claudeMdFile: config.claudeMdFile,
+    writeback: config.writeback,
+    riskGate: config.riskGate,
+    hasUserConfig,
+    configFilePath: CONFIG_FILE_PATH,
+  };
+});
+
+app.post<{ Body: { targetPath?: string; targetLabel?: string } }>('/api/config', async (req, reply) => {
+  const fs = await import('node:fs');
+  const body = req.body ?? {};
+  const targetPath = (body.targetPath ?? '').trim();
+  const targetLabel = (body.targetLabel ?? '').trim();
+  if (!targetPath || !targetLabel) {
+    reply.code(400);
+    return { error: 'targetPath and targetLabel are required' };
+  }
+  // Persist a minimal config — only the fields the user provides. The
+  // schema's defaults fill in everything else on next boot.
+  const existing: Record<string, unknown> = fs.existsSync(CONFIG_FILE_PATH)
+    ? JSON.parse(fs.readFileSync(CONFIG_FILE_PATH, 'utf8')) as Record<string, unknown>
+    : {};
+  existing.targetPath = targetPath;
+  existing.targetLabel = targetLabel;
+  fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(existing, null, 2) + '\n');
+  return { ok: true, restartRequired: true, configFilePath: CONFIG_FILE_PATH };
+});
+
 // REST: snapshot — initial state for the UI.
 app.get('/api/snapshot', async () => {
   const snap = snapshot();

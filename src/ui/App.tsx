@@ -4,6 +4,7 @@ import { BootstrapProgress } from './BootstrapProgress';
 import { EntitiesPanel } from './EntitiesPanel';
 import { GraphPanel } from './GraphPanel';
 import { GraphPlayground } from './GraphPlayground';
+import { SetupWizard } from './SetupWizard';
 
 type Severity = 'info' | 'warn' | 'error';
 
@@ -66,6 +67,7 @@ export function App() {
   const [graphOpen, setGraphOpen] = useState(false);
   const [playgroundOpen, setPlaygroundOpen] = useState(false);
   const [entitiesOpen, setEntitiesOpen] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -187,6 +189,11 @@ export function App() {
             className="mono"
             style={{ padding: '4px 10px', fontSize: 10, letterSpacing: 1, color: 'var(--accent)', borderColor: 'var(--accent)' }}
           >ENTITIES</button>
+          <button
+            onClick={() => setSetupOpen(true)}
+            className="mono"
+            style={{ padding: '4px 10px', fontSize: 10, letterSpacing: 1, color: 'var(--fg-2)' }}
+          >SETUP</button>
           <button
             onClick={() => setGraphOpen(true)}
             className="mono"
@@ -313,6 +320,7 @@ export function App() {
       {graphOpen && <GraphPanel onClose={() => setGraphOpen(false)} />}
       {playgroundOpen && <GraphPlayground onClose={() => setPlaygroundOpen(false)} />}
       {entitiesOpen && <EntitiesPanel onClose={() => setEntitiesOpen(false)} />}
+      {setupOpen && <SetupWizard onClose={() => setSetupOpen(false)} />}
     </div>
   );
 }
