@@ -141,6 +141,14 @@ export const SelfMonitorFindingSchema = Base.extend({
   ]),
 });
 
+export const SelfImproveFindingSchema = Base.extend({
+  kind: z.enum([
+    'self:prompt-diff-proposal',
+    'self:no-improvements-needed',
+    'self:agent-prompt-missing',
+  ]),
+});
+
 export const ProberFindingSchema = Base.extend({
   kind: z.enum([
     'prober:up',
@@ -271,6 +279,7 @@ export const SCHEMA_BY_AGENT = {
   prober: ProberFindingSchema,
   'self-awareness': SelfAwarenessFindingSchema,
   'self-monitor': SelfMonitorFindingSchema,
+  'self-improve': SelfImproveFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;

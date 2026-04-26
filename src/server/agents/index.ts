@@ -23,6 +23,7 @@ import { registryAgent } from './registry.ts';
 import { screenshotsAgent } from './screenshots.ts';
 import { secretsAgent } from './secrets.ts';
 import { selfAwarenessAgent } from './self-awareness.ts';
+import { selfImproveAgent } from './self-improve.ts';
 import { selfMonitorAgent } from './self-monitor.ts';
 import { syncAgent } from './sync.ts';
 
@@ -49,7 +50,8 @@ export const ALL_AGENTS: Agent[] = [
   bindingsAgent,        // claude -p — JSX field → op.field high-res wiring
   aiCoverageAgent,      // claude -p — every manual write/cmd needs an aiAffordance
   bootstrapAgent,       // claude -p — manual / one-shot project model build
-  curatorAgent,         // deterministic — cross-verifies + write-back to user repo
+  selfImproveAgent,     // claude -p — proposes prompt diffs for problem agents
+  curatorAgent,         // deterministic — cross-verifies + audits user concerns
 ];
 
 /** Agents the daemon actually runs. Filtered by config.agentsToEnable —
