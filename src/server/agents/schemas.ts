@@ -241,6 +241,8 @@ export const MemoryKeeperFindingSchema = Base.extend({
     'memory:vacuum-failed',
     'memory:completeness',
     'memory:integrity-summary',
+    'phase:bootstrapping',
+    'phase:live-ready',
   ]),
 });
 

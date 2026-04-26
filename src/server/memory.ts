@@ -693,6 +693,24 @@ export function recordRun(opts: { agent: string; startedAt: number; durationMs: 
   insertRun.run(opts.agent, opts.startedAt, opts.durationMs, opts.ok ? 1 : 0, opts.findingCount, opts.error ?? null);
 }
 
+// ─── system phase (bootstrapping → live) ──────────────────────────────────
+
+export type SystemPhase = 'bootstrapping' | 'live';
+
+/** Read the current system phase. Defaults to 'bootstrapping' on first run
+ *  (no phase note yet). The phase gates the curator's audit pass + the
+ *  bootstrap agent's iteration loop. */
+export function getPhase(): SystemPhase {
+  const r = recall<SystemPhase>('system', 'phase');
+  return r === 'live' ? 'live' : 'bootstrapping';
+}
+
+/** Persist the system phase. memory-keeper flips bootstrapping → live once
+ *  the completeness gate passes. */
+export function setPhase(p: SystemPhase): void {
+  note('system', 'phase', p);
+}
+
 const sqliteVacuum = db.prepare('VACUUM');
 
 /** Compact the underlying SQLite file. Slow-ish (full rewrite); the

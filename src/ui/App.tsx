@@ -30,11 +30,12 @@ type AgentRun = {
 
 type AgentInfo = { name: string; description: string };
 type Target = { path: string; label: string };
+type SystemPhase = 'bootstrapping' | 'live';
 
 type ServerEvent =
   | { type: 'finding'; finding: Finding }
   | { type: 'run'; run: AgentRun }
-  | { type: 'snapshot'; findings: Finding[]; runs: AgentRun[]; agents: AgentInfo[]; target: Target };
+  | { type: 'snapshot'; findings: Finding[]; runs: AgentRun[]; agents: AgentInfo[]; target: Target; phase: SystemPhase };
 
 const SEV_COLOR: Record<Severity, string> = {
   info:  'var(--info)',
@@ -47,6 +48,7 @@ export function App() {
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [target, setTarget] = useState<Target | null>(null);
+  const [phase, setPhase] = useState<SystemPhase>('bootstrapping');
   const [connected, setConnected] = useState(false);
   const [filterAgent, setFilterAgent] = useState<string>('all');
   const [filterSev, setFilterSev] = useState<'all' | Severity>('all');
@@ -71,6 +73,7 @@ export function App() {
             setRuns(msg.runs);
             setAgents(msg.agents);
             setTarget(msg.target);
+            setPhase(msg.phase);
           } else if (msg.type === 'finding') {
             setFindings((prev) => [...prev, msg.finding].slice(-1000));
             setLastLiveAt(Date.now());
@@ -128,8 +131,16 @@ export function App() {
       {/* Header */}
       <div style={{ borderBottom: '1px solid var(--hairline)', padding: '14px 22px', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
         <div>
-          <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: 2 }}>
-            NIK-DEV-INFRA · ALWAYS-ON · CLAUDE MAX
+          <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: 2, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span>NIK-DEV-INFRA · ALWAYS-ON · CLAUDE MAX</span>
+            <span style={{
+              padding: '1px 8px', borderRadius: 4, fontSize: 9,
+              color: phase === 'live' ? 'var(--ok)' : 'var(--warn)',
+              border: `1px solid ${phase === 'live' ? 'var(--ok)' : 'var(--warn)'}`,
+              background: phase === 'live' ? 'rgba(95,212,154,0.08)' : 'rgba(255,209,102,0.08)',
+            }}>
+              {phase === 'live' ? 'LIVE' : 'BOOTSTRAPPING'}
+            </span>
           </div>
           <div style={{ fontSize: 22, fontWeight: 600, marginTop: 2 }}>
             Live agent findings

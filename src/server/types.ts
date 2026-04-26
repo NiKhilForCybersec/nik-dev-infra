@@ -48,6 +48,8 @@ export type Agent = {
   run: () => Promise<Finding[]>;
 };
 
+export type SystemPhase = 'bootstrapping' | 'live';
+
 export type ServerEvent =
   | { type: 'finding'; finding: Finding }
   | { type: 'run'; run: AgentRun }
@@ -57,4 +59,5 @@ export type ServerEvent =
       runs: AgentRun[];
       agents: { name: string; description: string }[];
       target: { path: string; label: string };
+      phase: SystemPhase;
     };

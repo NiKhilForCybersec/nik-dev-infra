@@ -27,11 +27,13 @@
 import { newId } from '../findings.ts';
 import {
   defineSegment,
+  getPhase,
   listHooks,
   listSegments,
   memoryStats,
   pruneRevisions,
   query,
+  setPhase,
   vacuum,
   wikiList,
 } from '../memory.ts';
@@ -233,8 +235,41 @@ export const memoryKeeperAgent: Agent = {
       },
     });
 
-    // ── 8. Integrity summary at the end ──────────────────────────────────
+    // Phase gate (D.17): flip bootstrapping → live when the model is
+    // mature enough. Hard-path thresholds: ≥ 95% completeness AND ≥ 5
+    // segments AND ≥ 5 wiki pages. Once flipped, the system enters live
+    // monitoring mode; the curator's audit pass + write-back become
+    // active. We never flip BACK to bootstrapping automatically — that's
+    // a manual operator decision (clear data/memory.db).
     const stats = memoryStats();
+    const phase = getPhase();
+    if (phase === 'bootstrapping') {
+      const ready = overall >= 95 && segmentsTotal >= 5 && stats.wikiPages >= 5;
+      if (ready) {
+        setPhase('live');
+        findings.push({
+          id: newId(),
+          agent: 'memory-keeper',
+          kind: 'phase:live-ready',
+          at: now,
+          severity: 'info',
+          summary: `bootstrap complete · model at ${overall}% completeness with ${segmentsTotal} segments + ${stats.wikiPages} wiki pages — flipping to live mode`,
+          payload: { overall_pct: overall, segments: segmentsTotal, wikiPages: stats.wikiPages },
+        });
+      } else {
+        findings.push({
+          id: newId(),
+          agent: 'memory-keeper',
+          kind: 'phase:bootstrapping',
+          at: now,
+          severity: 'info',
+          summary: `bootstrapping · ${overall}% complete · ${segmentsTotal} segments · ${stats.wikiPages} wiki pages (need ≥95% + ≥5 + ≥5 to flip live)`,
+          payload: { overall_pct: overall, segments: segmentsTotal, wikiPages: stats.wikiPages },
+        });
+      }
+    }
+
+    // ── 8. Integrity summary at the end ──────────────────────────────────
     findings.push({
       id: newId(),
       agent: 'memory-keeper',

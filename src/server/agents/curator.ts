@@ -45,7 +45,7 @@ import { fileURLToPath } from 'node:url';
 import { parseJsonArray, runClaude } from '../claude.ts';
 import { config } from '../config.ts';
 import { newId } from '../findings.ts';
-import { isPromoted, query, recordPromotion } from '../memory.ts';
+import { getPhase, isPromoted, query, recordPromotion } from '../memory.ts';
 import type { Agent, Finding } from '../types.ts';
 import { parseFinding, rejectedFinding } from '../findings.ts';
 import { CuratorFindingSchema } from './schemas.ts';
@@ -384,6 +384,22 @@ export const curatorAgent: Agent = {
     // Audit verdicts surface as findings; when writeback.enabled is on,
     // unaddressed entries get an in-place ⚠ annotation appended under
     // them (NOT a new bullet at the bottom).
+    //
+    // D.17 gate: skip audit while the system is still bootstrapping.
+    // The curator should not pass judgment on existing concerns until
+    // memory-keeper confirms the project model is ≥ 95% complete.
+    if (getPhase() === 'bootstrapping') {
+      out.push({
+        id: newId(),
+        agent: 'curator',
+        kind: 'curator:summary',
+        at: now,
+        severity: 'info',
+        summary: `curator paused · system still bootstrapping · ${promotedCount} promoted (security fast-path) · ${suppressedCount} suppressed`,
+        payload: { phase: 'bootstrapping', promoted: promotedCount, suppressed: suppressedCount },
+      });
+      return out;
+    }
     const concernsPath = resolve(config.targetPath, config.concernsFile);
     if (!existsSync(concernsPath)) {
       out.push({

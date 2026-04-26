@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { AGENTS } from './agents/index.ts';
 import { config } from './config.ts';
 import { onFinding, onRun, snapshot } from './findings.ts';
-import { entities, factsByPredicate, listHooks, listSegments, memoryStats, query, recallAll, wikiHistory, wikiList, wikiRead } from './memory.ts';
+import { entities, factsByPredicate, getPhase, listHooks, listSegments, memoryStats, query, recallAll, wikiHistory, wikiList, wikiRead } from './memory.ts';
 import { startOrchestrator, triggerAgent } from './orchestrator.ts';
 import type { ServerEvent } from './types.ts';
 
@@ -30,6 +30,7 @@ app.get('/api/snapshot', async () => {
     ...snap,
     agents: AGENTS.map((a) => ({ name: a.name, description: a.description })),
     target: { path: config.targetPath, label: config.targetLabel },
+    phase: getPhase(),
   };
 });
 
@@ -212,6 +213,7 @@ app.register(async (instance) => {
       ...snap,
       agents: AGENTS.map((a) => ({ name: a.name, description: a.description })),
       target: { path: config.targetPath, label: config.targetLabel },
+      phase: getPhase(),
     } as ServerEvent);
     const off1 = onFinding((finding) => {
       app.log.info(`[ws] finding → ${wsClients} client(s) · ${finding.agent}/${finding.kind}`);

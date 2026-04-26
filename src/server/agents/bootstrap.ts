@@ -32,7 +32,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runClaude } from '../claude.ts';
 import { newId, rejectedFinding } from '../findings.ts';
-import { defineSegment, entities, lookup, registerEntity, wikiUpsert } from '../memory.ts';
+import { defineSegment, entities, getPhase, lookup, registerEntity, wikiUpsert } from '../memory.ts';
 import type { Agent, Finding } from '../types.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -75,8 +75,23 @@ export const bootstrapAgent: Agent = {
   name: 'bootstrap',
   description: 'Builds the project model: clusters register entities into segments + seeds a wiki page per segment.',
   routedFiles: [],
-  intervalMs: 0,                       // manual / one-shot only
+  // During bootstrapping the agent self-iterates every 30 minutes to
+  // refine clusters until memory-keeper flips the phase to 'live'.
+  // Once live, run() short-circuits — no LLM cost wasted re-clustering
+  // a model already at ≥ 95% completeness.
+  intervalMs: 30 * 60 * 1000,
   run: async () => {
+    if (getPhase() === 'live') {
+      return [{
+        id: newId(),
+        agent: 'bootstrap',
+        kind: 'bootstrap:start',
+        at: Date.now(),
+        severity: 'info',
+        summary: 'system is in live mode — bootstrap pass not needed; trigger manually if a re-cluster is desired',
+        payload: { phase: 'live' },
+      }];
+    }
     const ents = entities();
     if (ents.length === 0) {
       return [{
