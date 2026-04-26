@@ -55,6 +55,15 @@ const ConfigSchema = z.object({
     url: z.string().url(),
     headers: z.record(z.string()).optional(),
   })),
+  /** Write-back to the user's repo. OFF by default. When `enabled: true`,
+   *  the curator agent may append cross-verified findings to the
+   *  configured `concernsFile` and (if `insertClaudeMdGate`) idempotently
+   *  insert a single instruction line into `claudeMdFile`. Writes are
+   *  restricted to those two paths only — nothing else under the repo. */
+  writeback: z.object({
+    enabled: z.boolean(),
+    insertClaudeMdGate: z.boolean(),
+  }),
   /** Concerns markdown file, relative to targetPath. */
   concernsFile: z.string(),
   /** CLAUDE.md file, relative to targetPath. */
@@ -92,6 +101,7 @@ const DEFAULT_CONFIG: DevInfraConfig = {
   concernsFile: 'docs/Concerns.md',
   claudeMdFile: 'CLAUDE.md',
   screenshotsDir: 'docs/screenshots',
+  writeback: { enabled: false, insertClaudeMdGate: false },
   agentsToEnable: null,
 };
 

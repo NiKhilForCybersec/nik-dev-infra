@@ -154,6 +154,21 @@ db.exec(`
     at      INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_wiki_revisions_topic ON wiki_revisions(segment, topic, at DESC);
+
+  -- Curator promotions: records every finding that was successfully
+  -- written to the user's Concerns.md so we never double-write the same
+  -- one. Keyed on finding_id (which is unique across all agents).
+  CREATE TABLE IF NOT EXISTS promotions (
+    finding_id TEXT PRIMARY KEY,
+    agent      TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    severity   TEXT NOT NULL,
+    summary    TEXT NOT NULL,
+    file       TEXT,
+    promoted_to TEXT NOT NULL,
+    at         INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_promotions_at ON promotions(at DESC);
 `);
 
 const WIKI_DIR = resolve(DATA_DIR, 'wiki');
@@ -619,6 +634,37 @@ const deleteOldRevisions = db.prepare(`
 export function pruneRevisions(segment: string, topic: string, keepN: number): number {
   const r = deleteOldRevisions.run(segment, topic, keepN);
   return Number(r.changes);
+}
+
+const insertPromotion = db.prepare(`
+  INSERT OR IGNORE INTO promotions
+    (finding_id, agent, kind, severity, summary, file, promoted_to, at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`);
+const promotionExists = db.prepare(`SELECT 1 FROM promotions WHERE finding_id = ?`);
+
+/** Record that a finding was promoted (written to the user's repo).
+ *  Returns true if this was a fresh promotion, false if it was already
+ *  promoted (idempotency check). */
+export function recordPromotion(opts: {
+  findingId: string;
+  agent: string;
+  kind: string;
+  severity: string;
+  summary: string;
+  file?: string;
+  promotedTo: string;
+}): boolean {
+  if (promotionExists.get(opts.findingId)) return false;
+  insertPromotion.run(
+    opts.findingId, opts.agent, opts.kind, opts.severity, opts.summary,
+    opts.file ?? null, opts.promotedTo, Date.now(),
+  );
+  return true;
+}
+
+export function isPromoted(findingId: string): boolean {
+  return promotionExists.get(findingId) !== undefined;
 }
 
 const sqliteVacuum = db.prepare('VACUUM');

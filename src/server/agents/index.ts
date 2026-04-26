@@ -6,6 +6,7 @@ import type { Agent } from '../types.ts';
 import { accessibilityAgent } from './accessibility.ts';
 import { bootstrapAgent } from './bootstrap.ts';
 import { concernsAgent } from './concerns.ts';
+import { curatorAgent } from './curator.ts';
 import { databaseAgent } from './database.ts';
 import { driftAgent } from './drift.ts';
 import { graphAgent } from './graph.ts';
@@ -38,6 +39,7 @@ export const ALL_AGENTS: Agent[] = [
   syncAgent,            // claude -p — cross-screen value consistency
   accessibilityAgent,   // claude -p — WCAG-leaning quick wins
   bootstrapAgent,       // claude -p — manual / one-shot project model build
+  curatorAgent,         // deterministic — cross-verifies + write-back to user repo
 ];
 
 /** Agents the daemon actually runs. Filtered by config.agentsToEnable —

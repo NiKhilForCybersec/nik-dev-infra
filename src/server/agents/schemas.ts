@@ -125,6 +125,17 @@ export const BootstrapFindingSchema = Base.extend({
   ]),
 });
 
+export const CuratorFindingSchema = Base.extend({
+  kind: z.enum([
+    'curator:summary',
+    'curator:promoted',
+    'curator:suppressed',
+    'curator:write-disabled',
+    'curator:write-failed',
+    'curator:claudemd-updated',
+  ]),
+});
+
 export const ScreenshotsFindingSchema = Base.extend({
   kind: z.enum([
     'screenshots:summary',
@@ -201,6 +212,7 @@ export const SCHEMA_BY_AGENT = {
   bootstrap: BootstrapFindingSchema,
   orchestrator: OrchestratorFindingSchema,
   screenshots: ScreenshotsFindingSchema,
+  curator: CuratorFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;
