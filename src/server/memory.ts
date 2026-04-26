@@ -184,6 +184,18 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_runs_agent_at ON agent_runs(agent, started_at DESC);
   CREATE INDEX IF NOT EXISTS idx_runs_at       ON agent_runs(started_at DESC);
+
+  -- Per-(agent, segment) rolling summary (D.22 / 12-patterns #5).
+  -- Populated by the dream-consolidator agent (D.21); read by every
+  -- LLM agent's runClaude call so the agent doesn't re-derive state
+  -- on every run. Segment '*' = an agent-wide summary.
+  CREATE TABLE IF NOT EXISTS agent_summaries (
+    agent      TEXT NOT NULL,
+    segment    TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (agent, segment)
+  );
 `);
 
 const WIKI_DIR = resolve(DATA_DIR, 'wiki');
@@ -691,6 +703,29 @@ const insertRun = db.prepare(`
  *  durable record for self-monitor (D.13). */
 export function recordRun(opts: { agent: string; startedAt: number; durationMs: number; ok: boolean; findingCount: number; error?: string }): void {
   insertRun.run(opts.agent, opts.startedAt, opts.durationMs, opts.ok ? 1 : 0, opts.findingCount, opts.error ?? null);
+}
+
+const upsertSummary = db.prepare(`
+  INSERT INTO agent_summaries (agent, segment, content, updated_at)
+    VALUES (?, ?, ?, ?)
+  ON CONFLICT(agent, segment) DO UPDATE SET
+    content = excluded.content,
+    updated_at = excluded.updated_at
+`);
+const selectSummary = db.prepare(`SELECT content, updated_at FROM agent_summaries WHERE agent = ? AND segment = ?`);
+
+/** Persist a per-(agent, segment) rolling summary. Use segment='*' for
+ *  an agent-wide summary. Populated by the dream-consolidator agent. */
+export function setSummary(agent: string, segment: string, content: string): void {
+  upsertSummary.run(agent, segment, content, Date.now());
+}
+
+/** Read a per-(agent, segment) rolling summary. Returns undefined if
+ *  none exists yet. Use segment='*' for the agent-wide summary. */
+export function getSummary(agent: string, segment = '*'): { content: string; updatedAt: number } | undefined {
+  const r = selectSummary.get(agent, segment) as { content: string; updated_at: number } | undefined;
+  if (!r) return undefined;
+  return { content: r.content, updatedAt: r.updated_at };
 }
 
 // ─── system phase (bootstrapping → live) ──────────────────────────────────

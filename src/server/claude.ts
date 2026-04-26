@@ -31,6 +31,11 @@ export type ClaudeRunOptions = {
    *  closes the prompt-injection → arbitrary-Write vector. Agents that
    *  legitimately need a wider surface MUST opt in explicitly. */
   allowedTools?: string[];
+  /** Optional rolling summary of what this agent has previously concluded
+   *  (12-patterns #5). When provided, prepended to the prompt as a
+   *  "PREVIOUSLY CONCLUDED" block so the agent doesn't re-derive state on
+   *  every run. Typically sourced via memory.getSummary(agentName). */
+  priorSummary?: string;
 };
 
 /** Default tool whitelist passed to every claude -p call. All current
@@ -52,8 +57,13 @@ export type ClaudeRunResult = {
 export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult> {
   const startedAt = Date.now();
   const allowed = opts.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
+  // Prepend rolling summary if the caller has one; the agent uses it as
+  // "what I previously concluded" context so it doesn't re-derive state.
+  const fullPrompt = opts.priorSummary
+    ? `## PREVIOUSLY CONCLUDED (auto-summary, may be stale — verify before relying)\n\n${opts.priorSummary}\n\n---\n\n${opts.prompt}`
+    : opts.prompt;
   const args = [
-    '-p', opts.prompt,
+    '-p', fullPrompt,
     '--output-format', 'json',
     '--add-dir', config.targetPath,
     '--allowed-tools', allowed.join(','),
