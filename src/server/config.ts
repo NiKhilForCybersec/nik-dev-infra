@@ -77,6 +77,22 @@ const ConfigSchema = z.object({
      *  must be true for any user-repo write. Belt-and-suspenders. */
     allowWriteUserRepo: z.boolean(),
   }),
+  /** Per-agent budget caps (Phase 4.4 / 12-patterns adjacent). Prevents
+   *  a runaway agent from burning the whole Claude Max budget in a
+   *  loop. The orchestrator counts runs in the trailing 24h via the
+   *  agent_runs table; if any agent exceeds its cap, the next run is
+   *  skipped + `budget:exceeded` is emitted. Resets implicitly as old
+   *  rows age out of the 24h window. */
+  agentBudgets: z.object({
+    /** Default cap on runs per 24h. Applied to any agent without an
+     *  explicit override. Generous default — most agents on
+     *  intervalMs=60s would run 1440x/day; cap at 2000 to leave
+     *  headroom for file-change-driven re-runs. */
+    defaultMaxRunsPerDay: z.number().int().positive(),
+    /** Per-agent overrides. Cheap deterministic agents can stay high;
+     *  expensive LLM agents (claude -p) should be lower. */
+    overrides: z.record(z.number().int().positive()),
+  }),
   /** Concerns markdown file, relative to targetPath. */
   concernsFile: z.string(),
   /** Resolutions markdown file (user's Claude logs claimed fixes here). */
@@ -119,6 +135,16 @@ const DEFAULT_CONFIG: DevInfraConfig = {
   screenshotsDir: 'docs/screenshots',
   writeback: { enabled: false, insertClaudeMdGate: false },
   riskGate: { allowWritePrompt: false, allowWriteUserRepo: false },
+  agentBudgets: {
+    defaultMaxRunsPerDay: 2000,
+    overrides: {
+      // LLM-driven agents — cap lower; ~1 run / 5 min sustained.
+      drift: 300, navigation: 300, hardcoded: 300, database: 200,
+      sync: 150, accessibility: 150, bindings: 200, 'ai-coverage': 150,
+      bootstrap: 100, 'doc-ingest': 100, concerns: 100,
+      'self-improve': 30, curator: 200,
+    },
+  },
   agentsToEnable: null,
 };
 

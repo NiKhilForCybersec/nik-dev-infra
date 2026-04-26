@@ -237,6 +237,7 @@ export const OrchestratorFindingSchema = Base.extend({
     'lifecycle:post',
     'lifecycle:error',
     'lifecycle:timeout',
+    'budget:exceeded',
   ]),
 });
 

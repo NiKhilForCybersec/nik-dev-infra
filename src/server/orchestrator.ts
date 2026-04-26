@@ -13,7 +13,7 @@ import { minimatch } from 'minimatch';
 import { AGENTS, RISK_CLASS_BY_AGENT } from './agents/index.ts';
 import { config } from './config.ts';
 import { emit, emitRun, newId, onFinding } from './findings.ts';
-import { addHook, entities, firingHooks, lookup } from './memory.ts';
+import { addHook, entities, firingHooks, lookup, query } from './memory.ts';
 import { startWatcher } from './watcher.ts';
 import type { Agent, Finding } from './types.ts';
 
@@ -26,6 +26,11 @@ type AgentState = {
 
 const state = new Map<string, AgentState>();
 for (const a of AGENTS) state.set(a.name, { inFlight: false, pending: false, lastRunAt: 0 });
+
+/** Last-warned timestamp per agent for the 4.4 budget gate. Throttles
+ *  the `budget:exceeded` finding to one per agent per hour so we don't
+ *  flood the rail when an agent stays over budget. */
+const budgetWarnedAt = new Map<string, number>();
 
 async function runAgent(agent: Agent): Promise<void> {
   const s = state.get(agent.name)!;
@@ -65,6 +70,33 @@ async function runAgent(agent: Agent): Promise<void> {
     } as Finding);
     // Do NOT return — the curator's audit + promote findings are still
     // useful read-only signals. The agent itself enforces no-write.
+  }
+
+  // Budget gate (Phase 4.4): count runs in the trailing 24h. If over
+  // cap, emit `budget:exceeded` once and skip. Implicit reset — rows
+  // age out of the 24h window naturally.
+  const budgetCap = config.agentBudgets.overrides[agent.name] ?? config.agentBudgets.defaultMaxRunsPerDay;
+  const runsLast24h = (query<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM agent_runs WHERE agent = ? AND started_at >= ?`,
+    [agent.name, Date.now() - 24 * 60 * 60 * 1000],
+  )[0]?.n) ?? 0;
+  if (runsLast24h >= budgetCap) {
+    // Emit at most one budget:exceeded finding per agent per hour to
+    // avoid spam. Approximation via in-memory map.
+    const lastBudget = budgetWarnedAt.get(agent.name) ?? 0;
+    if (Date.now() - lastBudget > 60 * 60 * 1000) {
+      budgetWarnedAt.set(agent.name, Date.now());
+      emit({
+        id: newId(),
+        agent: 'orchestrator',
+        kind: 'budget:exceeded',
+        at: Date.now(),
+        severity: 'warn',
+        summary: `${agent.name} hit budget cap of ${budgetCap} runs/24h (currently ${runsLast24h}) — skipping until window rolls`,
+        payload: { agent: agent.name, runsLast24h, cap: budgetCap },
+      } as Finding);
+    }
+    return;
   }
 
   s.inFlight = true;
