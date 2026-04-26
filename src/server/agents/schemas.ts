@@ -149,6 +149,14 @@ export const SelfImproveFindingSchema = Base.extend({
   ]),
 });
 
+export const DocIngestFindingSchema = Base.extend({
+  kind: z.enum([
+    'doc-ingest:summary',
+    'doc-ingest:read-failed',
+    'doc-ingest:no-docs',
+  ]),
+});
+
 export const ProberFindingSchema = Base.extend({
   kind: z.enum([
     'prober:up',
@@ -280,6 +288,7 @@ export const SCHEMA_BY_AGENT = {
   'self-awareness': SelfAwarenessFindingSchema,
   'self-monitor': SelfMonitorFindingSchema,
   'self-improve': SelfImproveFindingSchema,
+  'doc-ingest': DocIngestFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;

@@ -10,6 +10,7 @@ import { bootstrapAgent } from './bootstrap.ts';
 import { concernsAgent } from './concerns.ts';
 import { curatorAgent } from './curator.ts';
 import { databaseAgent } from './database.ts';
+import { docIngestAgent } from './doc-ingest.ts';
 import { driftAgent } from './drift.ts';
 import { graphAgent } from './graph.ts';
 import { hardcodedAgent } from './hardcoded.ts';
@@ -50,6 +51,7 @@ export const ALL_AGENTS: Agent[] = [
   bindingsAgent,        // claude -p — JSX field → op.field high-res wiring
   aiCoverageAgent,      // claude -p — every manual write/cmd needs an aiAffordance
   bootstrapAgent,       // claude -p — manual / one-shot project model build
+  docIngestAgent,       // claude -p — reads README + vision docs into meta/intent wiki
   selfImproveAgent,     // claude -p — proposes prompt diffs for problem agents
   curatorAgent,         // deterministic — cross-verifies + audits user concerns
 ];
