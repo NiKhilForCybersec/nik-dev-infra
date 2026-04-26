@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { AgentMetrics } from './AgentMetrics';
 
 type Severity = 'info' | 'warn' | 'error';
 
@@ -112,7 +113,7 @@ export function App() {
         </div>
       </div>
 
-      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '280px 1fr', gap: 0, minHeight: 0 }}>
+      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: filterAgent === 'all' ? '280px 1fr' : '280px 1fr 340px', gap: 0, minHeight: 0 }}>
         {/* Left: agent rail + recent runs */}
         <div style={{ borderRight: '1px solid var(--hairline)', padding: 14, overflowY: 'auto' }}>
           <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: 1.5, marginBottom: 8 }}>AGENTS · {agents.length}</div>
@@ -181,6 +182,20 @@ export function App() {
             )}
           </div>
         </div>
+
+        {/* Right: per-agent metrics panel (visible when an agent is selected) */}
+        {filterAgent !== 'all' && (() => {
+          const agentInfo = agents.find((a) => a.name === filterAgent)
+            ?? { name: filterAgent, description: '' };
+          return (
+            <AgentMetrics
+              agent={agentInfo}
+              runs={runs}
+              findings={findings}
+              onClose={() => setFilterAgent('all')}
+            />
+          );
+        })()}
       </div>
     </div>
   );
