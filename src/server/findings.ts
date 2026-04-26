@@ -23,6 +23,7 @@ import {
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { z } from 'zod';
+import { recordFinding } from './memory.ts';
 import type { AgentRun, Finding } from './types.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -49,8 +50,15 @@ if (existsSync(LOG_FILE)) {
 
 // Hydrate the ring from the tail of the active file only — archives are
 // not read at boot, so 100k+ historical findings have zero startup cost.
+// Each hydrated finding is also mirrored into the memory index in case
+// the SQLite db lags the JSONL (e.g. fresh checkout, or older findings
+// from before the memory layer existed).
 for (const line of tailLines(LOG_FILE, RING_MAX)) {
-  try { ring.push(JSON.parse(line)); } catch { /* skip malformed */ }
+  try {
+    const f = JSON.parse(line) as Finding;
+    ring.push(f);
+    recordFinding(f);
+  } catch { /* skip malformed */ }
 }
 
 export function emit(finding: Finding): void {
@@ -60,6 +68,7 @@ export function emit(finding: Finding): void {
   const line = JSON.stringify(finding) + '\n';
   appendFileSync(LOG_FILE, line);
   activeBytes += Buffer.byteLength(line);
+  recordFinding(finding);
   for (const fn of listeners) fn(finding);
 }
 

@@ -8,6 +8,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGENTS } from './agents/index.ts';
 import { onFinding, onRun, snapshot } from './findings.ts';
+import { factsByPredicate, memoryStats, query, recallAll } from './memory.ts';
 import { startOrchestrator } from './orchestrator.ts';
 import type { ServerEvent } from './types.ts';
 
@@ -28,6 +29,29 @@ app.get('/api/snapshot', async () => {
     ...snap,
     agents: AGENTS.map((a) => ({ name: a.name, description: a.description })),
   };
+});
+
+// REST: persistent memory stats + recent activity per agent.
+app.get('/api/memory', async () => {
+  const stats = memoryStats();
+  const perAgent = AGENTS.map((a) => ({
+    agent: a.name,
+    notes: recallAll(a.name).length,
+    findings: (query<{ n: number }>('SELECT COUNT(*) AS n FROM findings WHERE agent = ?', [a.name])[0]?.n) ?? 0,
+  }));
+  return { stats, perAgent };
+});
+
+// REST: facts ledger (the 100%-confirmed graph substrate).
+app.get<{ Querystring: { predicate?: string } }>('/api/facts', async (req) => {
+  const pred = req.query.predicate;
+  if (!pred) {
+    const sample = query<{ predicate: string; n: number }>(`
+      SELECT predicate, COUNT(*) AS n FROM facts GROUP BY predicate ORDER BY n DESC LIMIT 20
+    `);
+    return { byPredicate: sample };
+  }
+  return { facts: factsByPredicate(pred) };
 });
 
 // REST: project topology graph (built by the graph agent).

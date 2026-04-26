@@ -11,3 +11,6 @@ data/findings.jsonl
 data/findings.*.jsonl
 data/state.json
 data/graph.json
+data/memory.db
+data/memory.db-*
+data/notebooks/
