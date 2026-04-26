@@ -16,6 +16,7 @@ import { mcpAgent } from './mcp.ts';
 import { memoryKeeperAgent } from './memory-keeper.ts';
 import { navigationAgent } from './navigation.ts';
 import { registryAgent } from './registry.ts';
+import { screenshotsAgent } from './screenshots.ts';
 import { secretsAgent } from './secrets.ts';
 import { syncAgent } from './sync.ts';
 
@@ -28,6 +29,7 @@ export const ALL_AGENTS: Agent[] = [
   secretsAgent,         // deterministic — regex scan for committed secrets
   memoryKeeperAgent,    // deterministic — owner of the memory layer's integrity
   mcpAgent,             // deterministic — MCP server tool discovery
+  screenshotsAgent,     // deterministic — watches screenshots folder + prunes
   driftAgent,           // claude -p
   navigationAgent,      // claude -p
   hardcodedAgent,       // claude -p

@@ -315,6 +315,13 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
             {selected.entity?.file && (
               <div className="mono" style={{ fontSize: 11, color: 'var(--fg-2)' }}>{selected.entity.file}</div>
             )}
+
+            {/* Screen preview — pulls the latest *.png from the watched
+                repo's screenshots folder. 404 means the user's Claude
+                session hasn't dropped one yet. */}
+            {selected.entity?.kind === 'screen' && (
+              <ScreenPreview urn={selected.id} />
+            )}
             {selected.entity?.segment && (
               <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>segment: <span style={{ color: 'var(--fg-2)' }}>{selected.entity.segment}</span></div>
             )}
@@ -352,6 +359,42 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function ScreenPreview({ urn }: { urn: string }) {
+  // Cache-bust on URN change so a freshly dropped screenshot beats any
+  // stale browser cache. The /api/screenshots/<urn> endpoint also sets
+  // cache-control: no-cache for good measure.
+  const [status, setStatus] = useState<'loading' | 'ok' | 'missing'>('loading');
+  const src = `/api/screenshots/${encodeURIComponent(urn)}?t=${Date.now()}`;
+  return (
+    <div>
+      <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: 1.5, marginBottom: 4 }}>SCREEN PREVIEW</div>
+      {status === 'missing' ? (
+        <div className="glass" style={{ padding: 10 }}>
+          <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', lineHeight: 1.5 }}>
+            no screenshot dropped yet · ask your Claude session to save<br />
+            <span style={{ color: 'var(--fg-2)' }}>docs/screenshots/{urn.replace('screen:', '')}.png</span>
+          </div>
+        </div>
+      ) : (
+        <img
+          src={src}
+          alt={`${urn} preview`}
+          onLoad={() => setStatus('ok')}
+          onError={() => setStatus('missing')}
+          style={{
+            maxWidth: '100%', borderRadius: 8,
+            border: '1px solid var(--hairline)',
+            display: status === 'ok' ? 'block' : 'none',
+          }}
+        />
+      )}
+      {status === 'loading' && (
+        <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>loading…</div>
+      )}
     </div>
   );
 }

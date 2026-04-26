@@ -59,6 +59,11 @@ const ConfigSchema = z.object({
   concernsFile: z.string(),
   /** CLAUDE.md file, relative to targetPath. */
   claudeMdFile: z.string(),
+  /** Folder where the user's Claude Code session drops screenshots
+   *  per screen — `<ScreenName>.png`. Watched by the screenshots agent,
+   *  served via /api/screenshots/<urn>, surfaced in the playground
+   *  side panel. */
+  screenshotsDir: z.string(),
   /** Subset of agents to enable (by name). Null = all enabled. */
   agentsToEnable: z.array(z.string()).nullable(),
 });
@@ -86,6 +91,7 @@ const DEFAULT_CONFIG: DevInfraConfig = {
   mcpServers: [],
   concernsFile: 'docs/Concerns.md',
   claudeMdFile: 'CLAUDE.md',
+  screenshotsDir: 'docs/screenshots',
   agentsToEnable: null,
 };
 

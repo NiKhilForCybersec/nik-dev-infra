@@ -125,6 +125,13 @@ export const BootstrapFindingSchema = Base.extend({
   ]),
 });
 
+export const ScreenshotsFindingSchema = Base.extend({
+  kind: z.enum([
+    'screenshots:summary',
+    'screenshots:none',
+  ]),
+});
+
 export const OrchestratorFindingSchema = Base.extend({
   kind: z.enum([
     'hooks:fired',
@@ -193,6 +200,7 @@ export const SCHEMA_BY_AGENT = {
   mcp: McpFindingSchema,
   bootstrap: BootstrapFindingSchema,
   orchestrator: OrchestratorFindingSchema,
+  screenshots: ScreenshotsFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;

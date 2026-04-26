@@ -108,6 +108,41 @@ app.post<{ Params: { name: string } }>('/api/agents/:name/run', async (req, repl
   return { ok: true };
 });
 
+// REST: latest screenshot for a screen URN. URN format: 'screen:HomeScreen'
+// (we accept the bare screen name too). Looks up the most-recent matching
+// PNG in <repo>/<config.screenshotsDir>/.
+app.get<{ Params: { urn: string } }>('/api/screenshots/:urn', async (req, reply) => {
+  const urn = decodeURIComponent(req.params.urn);
+  const screenName = urn.startsWith('screen:') ? urn.slice('screen:'.length) : urn;
+  if (!/^[A-Z][A-Za-z0-9]*Screen$/.test(screenName)) {
+    reply.code(400);
+    return { error: 'expected URN of the form screen:<Name>Screen' };
+  }
+  const dir = resolve(config.targetPath, config.screenshotsDir);
+  if (!existsSync(dir)) {
+    reply.code(404);
+    return { error: `screenshots dir not present: ${config.screenshotsDir}` };
+  }
+  const fs = await import('node:fs');
+  let names: string[];
+  try { names = fs.readdirSync(dir); } catch { reply.code(404); return { error: 'unreadable' }; }
+  const sorted = names
+    .filter((n) => /\.(png|jpe?g|webp)$/i.test(n) && new RegExp(`^${screenName}\\b`).test(n))
+    .map((n) => ({ n, m: fs.statSync(resolve(dir, n)).mtimeMs }))
+    .sort((a, b) => b.m - a.m);
+  const newest = sorted[0];
+  if (!newest) {
+    reply.code(404);
+    return { error: `no screenshot for ${screenName} — drop one at ${config.screenshotsDir}/${screenName}.png` };
+  }
+  const file = resolve(dir, newest.n);
+  const ext = newest.n.slice(newest.n.lastIndexOf('.') + 1).toLowerCase();
+  const ct = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/png';
+  reply.header('content-type', ct);
+  reply.header('cache-control', 'no-cache');
+  return fs.readFileSync(file);
+});
+
 // REST: project topology graph (built by the graph agent).
 app.get('/api/graph', async (_req, reply) => {
   if (!existsSync(GRAPH_FILE)) {
