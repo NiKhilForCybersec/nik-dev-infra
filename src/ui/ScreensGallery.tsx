@@ -62,6 +62,7 @@ export function ScreensGallery({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
+  const [screenshotPresent, setScreenshotPresent] = useState<Map<string, boolean>>(new Map());
 
   useEffect(() => {
     Promise.all([
@@ -72,6 +73,18 @@ export function ScreensGallery({ onClose }: { onClose: () => void }) {
       .then(([s, g, f]) => { setScreens(s); setGraph(g); setFindings(f); })
       .catch((e) => setError((e as Error).message));
   }, []);
+
+  // Track which screens have screenshots so we can collapse the
+  // placeholder noise when none exist.
+  const noteScreenshot = (urn: string, present: boolean) => {
+    setScreenshotPresent((prev) => {
+      if (prev.get(urn) === present) return prev;
+      const next = new Map(prev);
+      next.set(urn, present);
+      return next;
+    });
+  };
+  const allEmpty = screens.length > 0 && [...screenshotPresent.values()].every((v) => !v) && screenshotPresent.size === screens.length;
 
   const sorted = useMemo(() => {
     const f = filter.trim().toLowerCase();
@@ -129,13 +142,34 @@ export function ScreensGallery({ onClose }: { onClose: () => void }) {
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         {/* Grid */}
         <div style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
+          {allEmpty && (
+            <div className="glass" style={{ padding: 14, marginBottom: 16, borderColor: 'var(--warn)', background: 'rgba(255,209,102,0.06)' }}>
+              <div className="mono" style={{ fontSize: 10, color: 'var(--warn)', letterSpacing: 1.5, marginBottom: 6 }}>NO SCREENSHOTS YET</div>
+              <div style={{ fontSize: 12, color: 'var(--fg-2)', lineHeight: 1.5, marginBottom: 6 }}>
+                The screenshots folder is empty. Paste this into your <code className="mono">~/NIK</code> Claude Code session to populate it:
+              </div>
+              <pre className="mono" style={{ fontSize: 10, color: 'var(--fg-2)', background: 'var(--surface)', padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap' }}>
+{`Take screenshots of every screen in this app for the dev-infra dashboard.
+The Vite dev server is at http://localhost:5173/. Use computer-use to:
+1. Open the app
+2. Tap each screen tile in the More menu (and Home, Chat, Profile etc.)
+3. Save each as ~/NIK/docs/screenshots/<ScreenName>.png matching the
+   class name (e.g. HomeScreen.png, HydrationScreen.png).`}
+              </pre>
+              <div style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 8 }}>
+                Or flip <code className="mono">writeback.enabled + insertClaudeMdGate</code> in <code className="mono">dev-infra.config.json</code> and the curator will instruct your Claude session to drop screenshots after every <code className="mono">*Screen.tsx</code> edit.
+              </div>
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
             {sorted.map((e) => (
               <ScreenCard
                 key={e.urn}
                 entity={e}
                 active={selected === e.urn}
+                allEmpty={allEmpty}
                 onClick={() => setSelected(e.urn)}
+                onScreenshotKnown={(present) => noteScreenshot(e.urn, present)}
               />
             ))}
           </div>
@@ -233,7 +267,13 @@ export function ScreensGallery({ onClose }: { onClose: () => void }) {
   );
 }
 
-function ScreenCard({ entity, active, onClick }: { entity: Entity; active: boolean; onClick: () => void }) {
+function ScreenCard({ entity, active, allEmpty, onClick, onScreenshotKnown }: {
+  entity: Entity;
+  active: boolean;
+  allEmpty: boolean;
+  onClick: () => void;
+  onScreenshotKnown: (present: boolean) => void;
+}) {
   const status = entity.findingErr > 0 ? 'err' : entity.findingWarn > 0 ? 'warn' : 'unknown';
   const statusColor = status === 'err' ? 'var(--err)' : status === 'warn' ? 'var(--warn)' : 'var(--hairline)';
   return (
@@ -252,11 +292,13 @@ function ScreenCard({ entity, active, onClick }: { entity: Entity; active: boole
           src={`/api/screenshots/${encodeURIComponent(entity.urn)}`}
           alt={entity.label}
           loading="lazy"
+          onLoad={() => onScreenshotKnown(true)}
           onError={(e) => {
+            onScreenshotKnown(false);
             const el = e.currentTarget as HTMLImageElement;
             el.style.display = 'none';
             const sib = el.nextElementSibling as HTMLDivElement | null;
-            if (sib) sib.style.display = 'flex';
+            if (sib && !allEmpty) sib.style.display = 'flex';
           }}
           style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
         />
