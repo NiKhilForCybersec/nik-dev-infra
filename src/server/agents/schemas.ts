@@ -101,6 +101,17 @@ export const SyncFindingSchema = Base.extend({
   ]),
 });
 
+export const AccessibilityFindingSchema = Base.extend({
+  kind: z.enum([
+    'a11y:icon-only-button',
+    'a11y:color-only-state',
+    'a11y:tap-target',
+    'a11y:label-missing',
+    'a11y:img-alt-missing',
+    'a11y:keyboard-trap',
+  ]),
+});
+
 export const SecretsFindingSchema = Base.extend({
   kind: z.enum([
     'secrets:anthropic',
@@ -132,6 +143,7 @@ export const SCHEMA_BY_AGENT = {
   'llm-cost': LlmCostFindingSchema,
   sync: SyncFindingSchema,
   secrets: SecretsFindingSchema,
+  accessibility: AccessibilityFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;
