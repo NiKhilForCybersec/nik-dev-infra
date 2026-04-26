@@ -107,6 +107,16 @@ export function App() {
     return out;
   }, [findings]);
 
+  // Per-agent last-run + last-status, derived from the runs ring.
+  const lastRunByAgent = useMemo(() => {
+    const m = new Map<string, AgentRun>();
+    for (const r of runs) {
+      const cur = m.get(r.agent);
+      if (!cur || r.startedAt > cur.startedAt) m.set(r.agent, r);
+    }
+    return m;
+  }, [runs]);
+
   const recentRuns = useMemo(() => runs.slice().reverse().slice(0, 8), [runs]);
 
   const livePulse = lastLiveAt !== null && Date.now() - lastLiveAt < 1500;
@@ -165,18 +175,26 @@ export function App() {
           <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: 1.5, marginBottom: 8 }}>AGENTS · {agents.length}</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 18 }}>
             <AgentChip name="all" total={findings.length} active={filterAgent === 'all'} onClick={() => setFilterAgent('all')} />
-            {agents.map((a) => (
-              <AgentChip
-                key={a.name}
-                name={a.name}
-                description={a.description}
-                total={counts[a.name]?.total ?? 0}
-                err={counts[a.name]?.error ?? 0}
-                warn={counts[a.name]?.warn ?? 0}
-                active={filterAgent === a.name}
-                onClick={() => setFilterAgent(a.name)}
-              />
-            ))}
+            {agents.map((a) => {
+              const lr = lastRunByAgent.get(a.name);
+              return (
+                <AgentChip
+                  key={a.name}
+                  name={a.name}
+                  description={a.description}
+                  total={counts[a.name]?.total ?? 0}
+                  err={counts[a.name]?.error ?? 0}
+                  warn={counts[a.name]?.warn ?? 0}
+                  active={filterAgent === a.name}
+                  onClick={() => setFilterAgent(a.name)}
+                  lastRunAt={lr?.startedAt}
+                  lastRunOk={lr?.ok}
+                  onRunNow={() => {
+                    void fetch(`/api/agents/${a.name}/run`, { method: 'POST' });
+                  }}
+                />
+              );
+            })}
           </div>
 
           <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: 1.5, marginBottom: 8 }}>RECENT RUNS</div>
@@ -253,14 +271,26 @@ export function App() {
 function AgentChip(props: {
   name: string; description?: string; total: number; err?: number; warn?: number;
   active: boolean; onClick: () => void;
+  lastRunAt?: number;
+  lastRunOk?: boolean;
+  onRunNow?: () => void;
 }) {
+  const lastRunStr = props.lastRunAt ? ago(props.lastRunAt) : null;
+  // 24h cap for "stale". Beyond that, tint orange.
+  const isStale = props.lastRunAt !== undefined && Date.now() - props.lastRunAt > 24 * 60 * 60 * 1000;
+  const neverRan = props.lastRunAt === undefined && props.name !== 'all';
+
   return (
     <div
       onClick={props.onClick}
       className="glass"
       style={{
         padding: 8, cursor: 'pointer',
-        borderColor: props.active ? 'var(--accent)' : 'var(--hairline)',
+        borderColor: props.active ? 'var(--accent)'
+          : props.lastRunOk === false ? 'var(--err)'
+          : neverRan ? 'var(--hairline)'
+          : isStale ? 'var(--warn)'
+          : 'var(--hairline)',
         background: props.active ? 'var(--accent-soft)' : 'var(--surface)',
       }}
     >
@@ -275,6 +305,27 @@ function AgentChip(props: {
       {props.description && (
         <div style={{ fontSize: 10, color: 'var(--fg-3)', marginTop: 3, lineHeight: 1.4 }}>
           {props.description}
+        </div>
+      )}
+      {props.name !== 'all' && (
+        <div className="mono" style={{ fontSize: 9, marginTop: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+          <span style={{
+            color: props.lastRunOk === false ? 'var(--err)'
+              : neverRan ? 'var(--fg-3)'
+              : isStale ? 'var(--warn)'
+              : 'var(--fg-3)',
+          }}>
+            {neverRan ? 'never ran'
+              : props.lastRunOk === false ? `failed · ${lastRunStr}`
+              : `ran ${lastRunStr}`}
+          </span>
+          {props.onRunNow && (
+            <button
+              onClick={(e) => { e.stopPropagation(); props.onRunNow!(); }}
+              className="mono"
+              style={{ padding: '1px 6px', fontSize: 9, color: 'var(--accent)', borderColor: 'var(--accent-soft)' }}
+            >run</button>
+          )}
         </div>
       )}
     </div>
