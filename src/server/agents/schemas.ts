@@ -84,6 +84,14 @@ export const GraphFindingSchema = Base.extend({
   ]),
 });
 
+export const LlmCostFindingSchema = Base.extend({
+  kind: z.enum([
+    'llm:expensive-call',
+    'llm:daily-summary',
+    'llm:not-configured',
+  ]),
+});
+
 export type RawFinding = z.infer<typeof Base>;
 
 export const SCHEMA_BY_AGENT = {
@@ -95,6 +103,7 @@ export const SCHEMA_BY_AGENT = {
   health: HealthFindingSchema,
   concerns: ConcernsFindingSchema,
   graph: GraphFindingSchema,
+  'llm-cost': LlmCostFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;

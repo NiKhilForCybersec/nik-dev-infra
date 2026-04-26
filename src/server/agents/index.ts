@@ -8,6 +8,7 @@ import { driftAgent } from './drift.ts';
 import { graphAgent } from './graph.ts';
 import { hardcodedAgent } from './hardcoded.ts';
 import { healthAgent } from './health.ts';
+import { llmCostAgent } from './llm-cost.ts';
 import { navigationAgent } from './navigation.ts';
 import { registryAgent } from './registry.ts';
 
@@ -15,6 +16,7 @@ export const AGENTS: Agent[] = [
   registryAgent,    // deterministic — always works
   healthAgent,      // deterministic — pings external services
   graphAgent,       // deterministic — builds topology JSON
+  llmCostAgent,     // deterministic — tails Supabase llm_calls table
   driftAgent,       // claude -p
   navigationAgent,  // claude -p
   hardcodedAgent,   // claude -p
