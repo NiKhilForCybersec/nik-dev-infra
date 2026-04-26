@@ -85,13 +85,56 @@ async function listScreens() {
     .map((f) => ({ urn: `screen:${f.replace('.tsx', '')}`, name: f.replace('.tsx', ''), file: `web/src/screens/${f}` }));
 }
 
+/** If the app renders an auth gate first (login screen with a
+ *  "Continue as demo user" / "Sign in" / "Skip" affordance), click it
+ *  once so subsequent screen captures see the actual app. The function
+ *  is idempotent — safe to call before every screen since clicking
+ *  nothing is a no-op. Returns true if a button was clicked. */
+async function bypassAuthIfPresent(page) {
+  const candidates = [
+    /^continue as demo user$/i,
+    /^continue as guest$/i,
+    /^skip$/i,
+    /^try without account$/i,
+    /^try the demo$/i,
+  ];
+  for (const re of candidates) {
+    try {
+      const btn = page.getByText(re).first();
+      if (await btn.isVisible({ timeout: 800 }).catch(() => false)) {
+        await btn.click({ timeout: 2000 }).catch(() => {});
+        // Wait for the auth chrome to actually leave the DOM. Without
+        // this we screenshot the "Signing in..." spinner mid-transition.
+        await page.waitForFunction(
+          () => {
+            const text = document.body.innerText || '';
+            return !/sign in|signing in|create account|continue as demo user|continue with google/i.test(text);
+          },
+          { timeout: 8000 },
+        ).catch(() => {});
+        await page.waitForLoadState('networkidle', { timeout: TIMEOUT_MS }).catch(() => {});
+        // Settle render after auth — networkidle can fire before the SPA
+        // has actually committed the post-auth view. 2.5s is well under
+        // a noticeable wait, well over React commit + lazy-suspense.
+        await page.waitForTimeout(2500);
+        return true;
+      }
+    } catch { /* */ }
+  }
+  return false;
+}
+
 // ── Per-screen navigation ─────────────────────────────────────────────────
 // The default strategy works for screens reachable via a More-tab tile
 // catalog: open the app, click 'More', then click a tile whose visible
 // text matches the screen label. Override per-screen in this map for
 // edge cases. Returns true if navigation succeeded.
 const CUSTOM_NAV = {
-  HomeScreen: async (page) => { await page.goto(DEV_URL, { waitUntil: 'networkidle' }); return true; },
+  HomeScreen: async (page) => {
+    await page.goto(DEV_URL, { waitUntil: 'networkidle' });
+    await bypassAuthIfPresent(page);
+    return true;
+  },
   // Add more as you discover the app's nav surface.
 };
 
@@ -101,6 +144,7 @@ async function navigateTo(page, screenName) {
   // Default: home → More tab → tile click.
   try {
     await page.goto(DEV_URL, { waitUntil: 'networkidle', timeout: TIMEOUT_MS });
+    await bypassAuthIfPresent(page);
     // Look for a 'More' link/button. Many apps label it 'More' or have an icon button.
     const more = page.getByText(/^more$/i).first();
     if (await more.isVisible({ timeout: 2000 }).catch(() => false)) {
