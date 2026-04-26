@@ -27,11 +27,12 @@ type AgentRun = {
 };
 
 type AgentInfo = { name: string; description: string };
+type Target = { path: string; label: string };
 
 type ServerEvent =
   | { type: 'finding'; finding: Finding }
   | { type: 'run'; run: AgentRun }
-  | { type: 'snapshot'; findings: Finding[]; runs: AgentRun[]; agents: AgentInfo[] };
+  | { type: 'snapshot'; findings: Finding[]; runs: AgentRun[]; agents: AgentInfo[]; target: Target };
 
 const SEV_COLOR: Record<Severity, string> = {
   info:  'var(--info)',
@@ -43,6 +44,7 @@ export function App() {
   const [findings, setFindings] = useState<Finding[]>([]);
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [target, setTarget] = useState<Target | null>(null);
   const [connected, setConnected] = useState(false);
   const [filterAgent, setFilterAgent] = useState<string>('all');
   const [filterSev, setFilterSev] = useState<'all' | Severity>('all');
@@ -64,6 +66,7 @@ export function App() {
             setFindings(msg.findings);
             setRuns(msg.runs);
             setAgents(msg.agents);
+            setTarget(msg.target);
           } else if (msg.type === 'finding') {
             setFindings((prev) => [...prev, msg.finding].slice(-1000));
             setLastLiveAt(Date.now());
@@ -114,7 +117,15 @@ export function App() {
           <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: 2 }}>
             NIK-DEV-INFRA · ALWAYS-ON · CLAUDE MAX
           </div>
-          <div style={{ fontSize: 22, fontWeight: 600, marginTop: 2 }}>Live agent findings</div>
+          <div style={{ fontSize: 22, fontWeight: 600, marginTop: 2 }}>
+            Live agent findings
+            {target && (
+              <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', marginLeft: 12, fontWeight: 400 }}>
+                watching: <span style={{ color: 'var(--fg-2)' }}>{target.label}</span>
+                <span style={{ color: 'var(--fg-3)', marginLeft: 6 }}>({target.path})</span>
+              </span>
+            )}
+          </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <button

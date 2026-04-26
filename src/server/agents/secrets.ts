@@ -13,7 +13,7 @@
 import { execa } from 'execa';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { NIK_PATH } from '../claude.ts';
+import { config } from '../config.ts';
 import { newId } from '../findings.ts';
 import type { Agent, Finding } from '../types.ts';
 
@@ -39,7 +39,7 @@ const MAX_BYTES = 512 * 1024;
 
 async function listTrackedFiles(): Promise<string[]> {
   try {
-    const r = await execa('git', ['ls-files'], { cwd: NIK_PATH });
+    const r = await execa('git', ['ls-files'], { cwd: config.targetPath });
     return r.stdout.split('\n').filter(Boolean);
   } catch {
     return [];
@@ -92,7 +92,7 @@ export const secretsAgent: Agent = {
         kind: 'secrets:no-source',
         at: Date.now(),
         severity: 'info',
-        summary: `target path not a git repo: ${NIK_PATH}`,
+        summary: `target path not a git repo: ${config.targetPath}`,
       }];
     }
 
@@ -102,7 +102,7 @@ export const secretsAgent: Agent = {
 
     for (const rel of tracked) {
       if (shouldSkip(rel)) { skipped++; continue; }
-      const abs = resolve(NIK_PATH, rel);
+      const abs = resolve(config.targetPath, rel);
       let body: string;
       try {
         const buf = readFileSync(abs);

@@ -1,6 +1,7 @@
 /* Agent registry. Adding a new agent = create the .ts + .md
  *  files in this dir + add an entry below. */
 
+import { agentEnabled } from '../config.ts';
 import type { Agent } from '../types.ts';
 import { accessibilityAgent } from './accessibility.ts';
 import { concernsAgent } from './concerns.ts';
@@ -15,7 +16,8 @@ import { registryAgent } from './registry.ts';
 import { secretsAgent } from './secrets.ts';
 import { syncAgent } from './sync.ts';
 
-export const AGENTS: Agent[] = [
+/** Full registry. Order is the agent rail's display order. */
+export const ALL_AGENTS: Agent[] = [
   registryAgent,        // deterministic — always works
   healthAgent,          // deterministic — pings external services
   graphAgent,           // deterministic — builds topology JSON
@@ -29,3 +31,7 @@ export const AGENTS: Agent[] = [
   syncAgent,            // claude -p — cross-screen value consistency
   accessibilityAgent,   // claude -p — WCAG-leaning quick wins
 ];
+
+/** Agents the daemon actually runs. Filtered by config.agentsToEnable —
+ *  if null, all are enabled. Imports `AGENTS` get the filtered set. */
+export const AGENTS: Agent[] = ALL_AGENTS.filter((a) => agentEnabled(a.name));

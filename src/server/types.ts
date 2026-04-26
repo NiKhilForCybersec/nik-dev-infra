@@ -51,4 +51,10 @@ export type Agent = {
 export type ServerEvent =
   | { type: 'finding'; finding: Finding }
   | { type: 'run'; run: AgentRun }
-  | { type: 'snapshot'; findings: Finding[]; runs: AgentRun[]; agents: { name: string; description: string }[] };
+  | {
+      type: 'snapshot';
+      findings: Finding[];
+      runs: AgentRun[];
+      agents: { name: string; description: string }[];
+      target: { path: string; label: string };
+    };

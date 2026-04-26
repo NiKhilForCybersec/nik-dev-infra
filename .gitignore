@@ -3,6 +3,9 @@ dist/
 .DS_Store
 *.tsbuildinfo
 
+# Per-developer target configuration (the example is committed, the real one isn't)
+dev-infra.config.json
+
 # Per-developer Claude Code state
 .claude/
 

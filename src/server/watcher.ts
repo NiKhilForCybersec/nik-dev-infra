@@ -1,4 +1,4 @@
-/* File watcher over ~/NIK using chokidar.
+/* File watcher over the target repo using chokidar.
  *
  * Emits 'change' events with a relative path. The orchestrator
  * subscribes + dispatches relevant agents (debounced).
@@ -6,26 +6,18 @@
 
 import chokidar from 'chokidar';
 import { resolve } from 'node:path';
-import { NIK_PATH } from './claude.ts';
+import { config } from './config.ts';
 
 export type WatchEvent = {
   kind: 'add' | 'change' | 'unlink';
-  /** Path relative to ~/NIK. */
+  /** Path relative to the watched repo's root. */
   rel: string;
   /** Absolute path. */
   abs: string;
 };
 
-const WATCH_TARGETS = [
-  'web/src/**/*.{ts,tsx}',
-  'web/public/*',
-  'supabase/migrations/*.sql',
-  'docs/**/*.md',
-  'packages/**/*.{ts,tsx}',
-];
-
 export function startWatcher(onEvent: (e: WatchEvent) => void): { stop: () => void } {
-  const targets = WATCH_TARGETS.map((p) => resolve(NIK_PATH, p));
+  const targets = config.watchGlobs.map((p) => resolve(config.targetPath, p));
   const watcher = chokidar.watch(targets, {
     ignored: [/node_modules/, /\/\.git\//, /\/dist\//],
     ignoreInitial: true,
@@ -34,7 +26,8 @@ export function startWatcher(onEvent: (e: WatchEvent) => void): { stop: () => vo
 
   for (const kind of ['add', 'change', 'unlink'] as const) {
     watcher.on(kind, (abs) => {
-      const rel = abs.startsWith(NIK_PATH) ? abs.slice(NIK_PATH.length + 1) : abs;
+      const root = config.targetPath;
+      const rel = abs.startsWith(root) ? abs.slice(root.length + 1) : abs;
       onEvent({ kind, rel, abs });
     });
   }

@@ -16,7 +16,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { NIK_PATH } from '../claude.ts';
+import { config } from '../config.ts';
 import { newId } from '../findings.ts';
 import type { Agent, Finding } from '../types.ts';
 
@@ -29,16 +29,13 @@ type EdgeKind = 'reads' | 'writes' | 'dispatches' | 'navigates_to';
 type Node = { id: string; type: NodeType; label: string; file?: string };
 type Edge = { from: string; to: string; kind: EdgeKind };
 
-const SCREENS_DIR = resolve(NIK_PATH, 'web/src/screens');
-const CONTRACTS_DIR = resolve(NIK_PATH, 'web/src/contracts');
-
 function listFiles(dir: string, predicate: (name: string) => boolean): string[] {
   try { return readdirSync(dir).filter(predicate).map((f) => resolve(dir, f)); }
   catch { return []; }
 }
 
 function rel(p: string): string {
-  return p.startsWith(NIK_PATH) ? p.slice(NIK_PATH.length + 1) : p;
+  return p.startsWith(config.targetPath) ? p.slice(config.targetPath.length + 1) : p;
 }
 
 function parseStringList(src: string, key: string): string[] {
@@ -52,22 +49,25 @@ export const graphAgent: Agent = {
   name: 'graph',
   description: 'Builds the project topology JSON (screens → ops → commands → navigation) for the graph panel.',
   routedFiles: [
-    'web/src/screens/*.tsx',
-    'web/src/screens/*.manifest.ts',
-    'web/src/contracts/*.ts',
+    ...(config.screensGlob ? [config.screensGlob] : []),
+    ...(config.manifestsGlob ? [config.manifestsGlob] : []),
+    ...(config.contractsDir ? [`${config.contractsDir}/*.ts`] : []),
   ],
   intervalMs: 0,
   run: async () => {
-    if (!existsSync(NIK_PATH)) {
+    if (!existsSync(config.targetPath)) {
       return [{
         id: newId(),
         agent: 'graph',
         kind: 'graph:no-source',
         at: Date.now(),
         severity: 'info',
-        summary: `target path does not exist: ${NIK_PATH}`,
+        summary: `target path does not exist: ${config.targetPath}`,
       }];
     }
+
+    const screensDir = config.screensGlob ? resolve(config.targetPath, dirname(config.screensGlob)) : null;
+    const contractsDir = config.contractsDir ? resolve(config.targetPath, config.contractsDir) : null;
 
     const nodes: Node[] = [];
     const edges: Edge[] = [];
@@ -75,7 +75,7 @@ export const graphAgent: Agent = {
     const addNode = (n: Node) => { if (!seenIds.has(n.id)) { seenIds.add(n.id); nodes.push(n); } };
 
     // Contracts → ops + commands
-    for (const file of listFiles(CONTRACTS_DIR, (f) => f.endsWith('.ts') && f !== 'index.ts')) {
+    if (contractsDir) for (const file of listFiles(contractsDir, (f) => f.endsWith('.ts') && f !== 'index.ts')) {
       const src = readFileSync(file, 'utf8');
       const re = /name:\s*['"]([\w.]+)['"]/g;
       let m: RegExpExecArray | null;
@@ -87,7 +87,7 @@ export const graphAgent: Agent = {
     }
 
     // Screens + their manifests + nav usage
-    const screenFiles = listFiles(SCREENS_DIR, (f) => f.endsWith('Screen.tsx'));
+    const screenFiles = screensDir ? listFiles(screensDir, (f) => f.endsWith('Screen.tsx')) : [];
     for (const file of screenFiles) {
       const screenName = basename(file).replace(/\.tsx$/, '');
       const screenId = `screen:${screenName}`;

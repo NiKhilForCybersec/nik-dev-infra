@@ -7,6 +7,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGENTS } from './agents/index.ts';
+import { config } from './config.ts';
 import { onFinding, onRun, snapshot } from './findings.ts';
 import { factsByPredicate, memoryStats, query, recallAll } from './memory.ts';
 import { startOrchestrator } from './orchestrator.ts';
@@ -28,6 +29,7 @@ app.get('/api/snapshot', async () => {
   return {
     ...snap,
     agents: AGENTS.map((a) => ({ name: a.name, description: a.description })),
+    target: { path: config.targetPath, label: config.targetLabel },
   };
 });
 
@@ -79,6 +81,7 @@ app.register(async (instance) => {
       type: 'snapshot',
       ...snap,
       agents: AGENTS.map((a) => ({ name: a.name, description: a.description })),
+      target: { path: config.targetPath, label: config.targetLabel },
     } as ServerEvent);
     const off1 = onFinding((finding) => {
       app.log.info(`[ws] finding → ${wsClients} client(s) · ${finding.agent}/${finding.kind}`);

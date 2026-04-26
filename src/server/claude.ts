@@ -10,11 +10,12 @@
  */
 
 import { execa, ExecaError } from 'execa';
-import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { config } from './config.ts';
 
-const NIK_PATH = process.env.NIK_PATH ?? resolve(homedir(), 'NIK');
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? 'claude';
+
+/** Re-exported for back-compat; new code should read `config.targetPath`. */
+const NIK_PATH = config.targetPath;
 
 export type ClaudeRunOptions = {
   /** The prompt to send. */
@@ -41,7 +42,7 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
   const args = [
     '-p', opts.prompt,
     '--output-format', 'json',
-    '--add-dir', NIK_PATH,
+    '--add-dir', config.targetPath,
   ];
   for (const d of opts.extraDirs ?? []) args.push('--add-dir', d);
 

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseJsonArray, runClaude } from '../claude.ts';
+import { config } from '../config.ts';
 import { parseFinding, rejectedFinding } from '../findings.ts';
 import type { Agent } from '../types.ts';
 import { ConcernsFindingSchema } from './schemas.ts';
@@ -11,10 +12,8 @@ const PROMPT = readFileSync(resolve(here, 'concerns.md'), 'utf8');
 
 export const concernsAgent: Agent = {
   name: 'concerns',
-  description: "Reads docs/Concerns.md and classifies each entry as open/resolved/unmapped, linking each open one to the agent that should watch it.",
-  routedFiles: [
-    'docs/Concerns.md',
-  ],
+  description: "Reads the concerns markdown file and classifies each entry as open/resolved/unmapped, linking each open one to the agent that should watch it.",
+  routedFiles: [config.concernsFile],
   // Daily backstop in case the file gets edited via something the watcher
   // misses (e.g. an external sync), or as a fresh classification pass.
   intervalMs: 24 * 60 * 60 * 1000,

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseJsonArray, runClaude } from '../claude.ts';
+import { config } from '../config.ts';
 import { parseFinding, rejectedFinding } from '../findings.ts';
 import type { Agent } from '../types.ts';
 import { DatabaseFindingSchema } from './schemas.ts';
@@ -13,8 +14,8 @@ export const databaseAgent: Agent = {
   name: 'database',
   description: 'Catches contract↔migration drift — column/type mismatches, missing RLS, missing user_id indexes.',
   routedFiles: [
-    'supabase/migrations/*.sql',
-    'web/src/contracts/*.ts',
+    ...(config.migrationsGlob ? [config.migrationsGlob] : []),
+    ...(config.contractsDir ? [`${config.contractsDir}/*.ts`] : []),
   ],
   // Migrations land rarely; an hourly sweep catches drift even when no
   // file changed (e.g. someone tweaked a contract without a migration).

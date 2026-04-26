@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseJsonArray, runClaude } from '../claude.ts';
+import { config } from '../config.ts';
 import { parseFinding, rejectedFinding } from '../findings.ts';
 import type { Agent } from '../types.ts';
 import { SyncFindingSchema } from './schemas.ts';
@@ -13,9 +14,9 @@ export const syncAgent: Agent = {
   name: 'sync',
   description: 'Catches cross-screen value disagreement — same metric, different op / hardcoded / different formula.',
   routedFiles: [
-    'web/src/screens/*.tsx',
-    'web/src/screens/*.manifest.ts',
-    'web/src/contracts/*.ts',
+    ...(config.screensGlob ? [config.screensGlob] : []),
+    ...(config.manifestsGlob ? [config.manifestsGlob] : []),
+    ...(config.contractsDir ? [`${config.contractsDir}/*.ts`] : []),
   ],
   // Sync issues compound; weekly backstop catches drift even when no
   // file edit triggered a run (e.g. rare ops only invoked at runtime).
