@@ -169,6 +169,21 @@ db.exec(`
     at         INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_promotions_at ON promotions(at DESC);
+
+  -- Persistent record of every agent run. The in-memory runs ring is
+  -- bounded at 200; this table is the durable source for self-monitor
+  -- (D.13) to compute 24h+ metrics across restarts.
+  CREATE TABLE IF NOT EXISTS agent_runs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent         TEXT NOT NULL,
+    started_at    INTEGER NOT NULL,
+    duration_ms   INTEGER NOT NULL,
+    ok            INTEGER NOT NULL,
+    finding_count INTEGER NOT NULL,
+    error         TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_runs_agent_at ON agent_runs(agent, started_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_runs_at       ON agent_runs(started_at DESC);
 `);
 
 const WIKI_DIR = resolve(DATA_DIR, 'wiki');
@@ -665,6 +680,17 @@ export function recordPromotion(opts: {
 
 export function isPromoted(findingId: string): boolean {
   return promotionExists.get(findingId) !== undefined;
+}
+
+const insertRun = db.prepare(`
+  INSERT INTO agent_runs (agent, started_at, duration_ms, ok, finding_count, error)
+  VALUES (?, ?, ?, ?, ?, ?)
+`);
+/** Persist an AgentRun for cross-session metrics. The in-memory ring
+ *  buffer in findings.ts handles dashboard updates; this table is the
+ *  durable record for self-monitor (D.13). */
+export function recordRun(opts: { agent: string; startedAt: number; durationMs: number; ok: boolean; findingCount: number; error?: string }): void {
+  insertRun.run(opts.agent, opts.startedAt, opts.durationMs, opts.ok ? 1 : 0, opts.findingCount, opts.error ?? null);
 }
 
 const sqliteVacuum = db.prepare('VACUUM');

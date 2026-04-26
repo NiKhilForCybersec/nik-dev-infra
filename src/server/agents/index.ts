@@ -22,6 +22,8 @@ import { proberAgent } from './prober.ts';
 import { registryAgent } from './registry.ts';
 import { screenshotsAgent } from './screenshots.ts';
 import { secretsAgent } from './secrets.ts';
+import { selfAwarenessAgent } from './self-awareness.ts';
+import { selfMonitorAgent } from './self-monitor.ts';
 import { syncAgent } from './sync.ts';
 
 /** Full registry. Order is the agent rail's display order. */
@@ -35,6 +37,8 @@ export const ALL_AGENTS: Agent[] = [
   mcpAgent,             // deterministic — MCP server tool discovery
   proberAgent,          // deterministic — runtime endpoint reachability + p95
   screenshotsAgent,     // deterministic — watches screenshots folder + prunes
+  selfAwarenessAgent,   // deterministic — dev-infra describes itself in memory
+  selfMonitorAgent,     // deterministic — per-agent latency / error / schema-rej metrics
   driftAgent,           // claude -p
   navigationAgent,      // claude -p
   hardcodedAgent,       // claude -p

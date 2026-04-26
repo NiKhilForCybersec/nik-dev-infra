@@ -125,6 +125,22 @@ export const BootstrapFindingSchema = Base.extend({
   ]),
 });
 
+export const SelfAwarenessFindingSchema = Base.extend({
+  kind: z.enum([
+    'self:described',
+  ]),
+});
+
+export const SelfMonitorFindingSchema = Base.extend({
+  kind: z.enum([
+    'self:agent-slow',
+    'self:agent-failing',
+    'self:prompt-broken',
+    'self:agent-silent',
+    'self:metrics-summary',
+  ]),
+});
+
 export const ProberFindingSchema = Base.extend({
   kind: z.enum([
     'prober:up',
@@ -245,6 +261,8 @@ export const SCHEMA_BY_AGENT = {
   bindings: BindingsFindingSchema,
   'ai-coverage': AiCoverageFindingSchema,
   prober: ProberFindingSchema,
+  'self-awareness': SelfAwarenessFindingSchema,
+  'self-monitor': SelfMonitorFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;

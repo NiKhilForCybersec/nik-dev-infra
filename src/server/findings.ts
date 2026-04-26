@@ -23,7 +23,7 @@ import {
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { z } from 'zod';
-import { recordFinding } from './memory.ts';
+import { recordFinding, recordRun } from './memory.ts';
 import type { AgentRun, Finding } from './types.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -75,6 +75,7 @@ export function emit(finding: Finding): void {
 export function emitRun(run: AgentRun): void {
   runs.push(run);
   if (runs.length > RUNS_MAX) runs.splice(0, runs.length - RUNS_MAX);
+  recordRun(run);
   for (const fn of runListeners) fn(run);
 }
 

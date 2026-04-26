@@ -150,6 +150,7 @@ ${Object.keys(pkg.deps).length > 50 ? `\n…and ${Object.keys(pkg.deps).length -
       topic: 'architecture',
       content: wikiBody,
       agent: 'self-awareness',
+      confidence: 1.0,
       evidence: ['package.json', 'src/server/agents/index.ts', 'src/server/agents/schemas.ts'],
     });
 
