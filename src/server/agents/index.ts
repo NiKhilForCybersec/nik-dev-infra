@@ -4,6 +4,7 @@
 import { agentEnabled } from '../config.ts';
 import type { Agent } from '../types.ts';
 import { accessibilityAgent } from './accessibility.ts';
+import { aiCoverageAgent } from './ai-coverage.ts';
 import { bindingsAgent } from './bindings.ts';
 import { bootstrapAgent } from './bootstrap.ts';
 import { concernsAgent } from './concerns.ts';
@@ -40,6 +41,7 @@ export const ALL_AGENTS: Agent[] = [
   syncAgent,            // claude -p — cross-screen value consistency
   accessibilityAgent,   // claude -p — WCAG-leaning quick wins
   bindingsAgent,        // claude -p — JSX field → op.field high-res wiring
+  aiCoverageAgent,      // claude -p — every manual write/cmd needs an aiAffordance
   bootstrapAgent,       // claude -p — manual / one-shot project model build
   curatorAgent,         // deterministic — cross-verifies + write-back to user repo
 ];

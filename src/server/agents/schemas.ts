@@ -125,6 +125,16 @@ export const BootstrapFindingSchema = Base.extend({
   ]),
 });
 
+export const AiCoverageFindingSchema = Base.extend({
+  kind: z.enum([
+    'ai-coverage:write-not-affordable',
+    'ai-coverage:command-not-affordable',
+    'ai-coverage:read-only-screen',
+    'ai-coverage:no-affordances-declared',
+    'ai-coverage:summary',
+  ]),
+});
+
 export const BindingsFindingSchema = Base.extend({
   kind: z.enum([
     'binding:found',
@@ -223,6 +233,7 @@ export const SCHEMA_BY_AGENT = {
   screenshots: ScreenshotsFindingSchema,
   curator: CuratorFindingSchema,
   bindings: BindingsFindingSchema,
+  'ai-coverage': AiCoverageFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;
