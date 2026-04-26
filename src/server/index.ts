@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { AGENTS } from './agents/index.ts';
 import { config } from './config.ts';
 import { onFinding, onRun, snapshot } from './findings.ts';
-import { factsByPredicate, memoryStats, query, recallAll } from './memory.ts';
+import { entities, factsByPredicate, listHooks, listSegments, memoryStats, query, recallAll } from './memory.ts';
 import { startOrchestrator } from './orchestrator.ts';
 import type { ServerEvent } from './types.ts';
 
@@ -54,6 +54,23 @@ app.get<{ Querystring: { predicate?: string } }>('/api/facts', async (req) => {
     return { byPredicate: sample };
   }
   return { facts: factsByPredicate(pred) };
+});
+
+// REST: segments tree.
+app.get<{ Querystring: { parent?: string } }>('/api/segments', async (req) => {
+  if (req.query.parent === undefined) return { segments: listSegments() };
+  const parent = req.query.parent === '' ? null : req.query.parent;
+  return { segments: listSegments(parent) };
+});
+
+// REST: register catalog (entities). Optional kind / segment filter.
+app.get<{ Querystring: { kind?: string; segment?: string } }>('/api/register', async (req) => {
+  return { entities: entities({ kind: req.query.kind, segment: req.query.segment }) };
+});
+
+// REST: active hooks list.
+app.get('/api/hooks', async () => {
+  return { hooks: listHooks() };
 });
 
 // REST: project topology graph (built by the graph agent).

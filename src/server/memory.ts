@@ -42,6 +42,7 @@ db.pragma('journal_mode = WAL');
 db.pragma('synchronous = NORMAL');
 
 db.exec(`
+  -- L0: append-only finding stream (mirrored from JSONL).
   CREATE TABLE IF NOT EXISTS findings (
     id           TEXT PRIMARY KEY,
     agent        TEXT NOT NULL,
@@ -58,6 +59,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_findings_kind     ON findings(kind);
   CREATE INDEX IF NOT EXISTS idx_findings_file     ON findings(file);
 
+  -- L1a: per-agent (key → value) observation store.
   CREATE TABLE IF NOT EXISTS notes (
     agent      TEXT NOT NULL,
     key        TEXT NOT NULL,
@@ -67,6 +69,7 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_notes_agent ON notes(agent);
 
+  -- L1b: 100%-confirmed (subject, predicate, object) graph triples.
   CREATE TABLE IF NOT EXISTS facts (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     agent         TEXT NOT NULL,
@@ -80,6 +83,50 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_facts_subject   ON facts(subject);
   CREATE INDEX IF NOT EXISTS idx_facts_predicate ON facts(predicate);
+
+  -- L2/L3: segments + micro-segments. parent NULL = top-level.
+  -- name uses a slash-separated path: 'auth' / 'auth/oauth' / 'auth/oauth/github'.
+  CREATE TABLE IF NOT EXISTS segments (
+    name        TEXT PRIMARY KEY,
+    parent      TEXT,
+    description TEXT,
+    owner_agent TEXT,
+    at          INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_segments_parent ON segments(parent);
+
+  -- L5: register — canonical catalog of every entity (screen, endpoint,
+  -- table, MCP tool, etc.) keyed by URN. Agents write here at confidence
+  -- 1.0 only, with file evidence references.
+  CREATE TABLE IF NOT EXISTS register (
+    urn           TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL,
+    label         TEXT NOT NULL,
+    segment       TEXT,
+    file          TEXT,
+    evidence_json TEXT,
+    confidence    REAL NOT NULL DEFAULT 1.0,
+    agent         TEXT NOT NULL,
+    at            INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_register_kind    ON register(kind);
+  CREATE INDEX IF NOT EXISTS idx_register_segment ON register(segment);
+
+  -- L6: hooks — named subscriptions. When (segment, event) fires, every
+  -- active hook on that pair routes to the agent with the prompt fragment
+  -- as extra context. Wiring of fire-time logic comes in Step D; this
+  -- commit just persists the intentions.
+  CREATE TABLE IF NOT EXISTS hooks (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    segment         TEXT NOT NULL,
+    event           TEXT NOT NULL,
+    agent           TEXT NOT NULL,
+    prompt_fragment TEXT,
+    active          INTEGER NOT NULL DEFAULT 1,
+    at              INTEGER NOT NULL,
+    UNIQUE(segment, event, agent)
+  );
+  CREATE INDEX IF NOT EXISTS idx_hooks_segment_event ON hooks(segment, event);
 `);
 
 const insertFinding = db.prepare(`
@@ -228,18 +275,183 @@ export function factsByPredicate(predicate: string): Fact[] {
   }));
 }
 
+// ─── L2/L3: segments ──────────────────────────────────────────────────────
+
+const upsertSegment = db.prepare(`
+  INSERT INTO segments (name, parent, description, owner_agent, at)
+    VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT(name) DO UPDATE SET
+    parent      = excluded.parent,
+    description = excluded.description,
+    owner_agent = excluded.owner_agent,
+    at          = excluded.at
+`);
+const selectSegment       = db.prepare('SELECT * FROM segments WHERE name = ?');
+const selectChildSegments = db.prepare('SELECT * FROM segments WHERE parent IS ? ORDER BY name');
+const selectAllSegments   = db.prepare('SELECT * FROM segments ORDER BY name');
+
+export type Segment = { name: string; parent: string | null; description?: string; ownerAgent?: string; at: number };
+
+/** Define (or refresh) a segment. Top-level: parent=null. Hierarchical
+ *  paths use slashes (e.g. 'auth/oauth/github'). The parent is the path
+ *  with the last segment chopped off; callers may pass it explicitly. */
+export function defineSegment(opts: { name: string; parent?: string | null; description?: string; ownerAgent?: string }): void {
+  const parent = opts.parent ?? (opts.name.includes('/') ? opts.name.slice(0, opts.name.lastIndexOf('/')) : null);
+  upsertSegment.run(opts.name, parent, opts.description ?? null, opts.ownerAgent ?? null, Date.now());
+}
+
+export function getSegment(name: string): Segment | undefined {
+  const r = selectSegment.get(name) as { name: string; parent: string | null; description: string | null; owner_agent: string | null; at: number } | undefined;
+  if (!r) return undefined;
+  return { name: r.name, parent: r.parent, description: r.description ?? undefined, ownerAgent: r.owner_agent ?? undefined, at: r.at };
+}
+
+/** List child segments of `parent` (null = top-level), or all if undefined. */
+export function listSegments(parent?: string | null): Segment[] {
+  const rows = (parent === undefined
+    ? selectAllSegments.all()
+    : selectChildSegments.all(parent)) as Array<{ name: string; parent: string | null; description: string | null; owner_agent: string | null; at: number }>;
+  return rows.map((r) => ({ name: r.name, parent: r.parent, description: r.description ?? undefined, ownerAgent: r.owner_agent ?? undefined, at: r.at }));
+}
+
+// ─── L5: register ─────────────────────────────────────────────────────────
+
+const upsertRegister = db.prepare(`
+  INSERT INTO register (urn, kind, label, segment, file, evidence_json, confidence, agent, at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(urn) DO UPDATE SET
+    kind          = excluded.kind,
+    label         = excluded.label,
+    segment       = excluded.segment,
+    file          = excluded.file,
+    evidence_json = excluded.evidence_json,
+    confidence    = excluded.confidence,
+    agent         = excluded.agent,
+    at            = excluded.at
+`);
+const selectRegisterByUrn  = db.prepare('SELECT * FROM register WHERE urn = ?');
+const selectRegisterByKind = db.prepare('SELECT * FROM register WHERE kind = ? ORDER BY label');
+const selectRegisterBySeg  = db.prepare('SELECT * FROM register WHERE segment = ? ORDER BY kind, label');
+const selectRegisterAll    = db.prepare('SELECT * FROM register ORDER BY kind, label');
+
+export type Entity = {
+  urn: string;
+  kind: string;
+  label: string;
+  segment?: string;
+  file?: string;
+  evidence?: string[];
+  confidence: number;
+  agent: string;
+  at: number;
+};
+
+/** Register (or refresh) an entity. Hard-path: confidence defaults to 1.0
+ *  — agents must pass < 1.0 explicitly if not certain, and ideally don't
+ *  call register at all unless they have file-level proof. */
+export function registerEntity(e: Omit<Entity, 'at' | 'confidence'> & { confidence?: number; at?: number }): void {
+  upsertRegister.run(
+    e.urn, e.kind, e.label,
+    e.segment ?? null,
+    e.file ?? null,
+    e.evidence ? JSON.stringify(e.evidence) : null,
+    e.confidence ?? 1.0,
+    e.agent,
+    e.at ?? Date.now(),
+  );
+}
+
+function rowToEntity(r: { urn: string; kind: string; label: string; segment: string | null; file: string | null; evidence_json: string | null; confidence: number; agent: string; at: number }): Entity {
+  return {
+    urn: r.urn, kind: r.kind, label: r.label,
+    segment: r.segment ?? undefined,
+    file: r.file ?? undefined,
+    evidence: r.evidence_json ? (JSON.parse(r.evidence_json) as string[]) : undefined,
+    confidence: r.confidence,
+    agent: r.agent,
+    at: r.at,
+  };
+}
+
+export function lookup(urn: string): Entity | undefined {
+  const r = selectRegisterByUrn.get(urn) as Parameters<typeof rowToEntity>[0] | undefined;
+  return r ? rowToEntity(r) : undefined;
+}
+
+export function entities(opts?: { kind?: string; segment?: string }): Entity[] {
+  let rows: Parameters<typeof rowToEntity>[0][];
+  if (opts?.kind)         rows = selectRegisterByKind.all(opts.kind)    as Parameters<typeof rowToEntity>[0][];
+  else if (opts?.segment) rows = selectRegisterBySeg.all(opts.segment)  as Parameters<typeof rowToEntity>[0][];
+  else                    rows = selectRegisterAll.all()                as Parameters<typeof rowToEntity>[0][];
+  return rows.map(rowToEntity);
+}
+
+// ─── L6: hooks ────────────────────────────────────────────────────────────
+
+const upsertHook = db.prepare(`
+  INSERT INTO hooks (segment, event, agent, prompt_fragment, active, at)
+    VALUES (?, ?, ?, ?, 1, ?)
+  ON CONFLICT(segment, event, agent) DO UPDATE SET
+    prompt_fragment = excluded.prompt_fragment,
+    active          = 1,
+    at              = excluded.at
+`);
+const deactivateHook = db.prepare(`
+  UPDATE hooks SET active = 0, at = ? WHERE segment = ? AND event = ? AND agent = ?
+`);
+const selectHooksFor = db.prepare(`
+  SELECT * FROM hooks WHERE segment = ? AND event = ? AND active = 1 ORDER BY at DESC
+`);
+const selectAllActiveHooks = db.prepare(`
+  SELECT * FROM hooks WHERE active = 1 ORDER BY segment, event, agent
+`);
+
+export type Hook = { id: number; segment: string; event: string; agent: string; promptFragment?: string; active: boolean; at: number };
+
+/** Subscribe `agent` to `event` in `segment`. promptFragment is appended
+ *  to that agent's prompt context when the hook fires (Step D wires that
+ *  in; this commit just persists the intent). */
+export function addHook(opts: { segment: string; event: string; agent: string; promptFragment?: string }): void {
+  upsertHook.run(opts.segment, opts.event, opts.agent, opts.promptFragment ?? null, Date.now());
+}
+
+export function removeHook(opts: { segment: string; event: string; agent: string }): void {
+  deactivateHook.run(Date.now(), opts.segment, opts.event, opts.agent);
+}
+
+function rowToHook(r: { id: number; segment: string; event: string; agent: string; prompt_fragment: string | null; active: number; at: number }): Hook {
+  return { id: r.id, segment: r.segment, event: r.event, agent: r.agent, promptFragment: r.prompt_fragment ?? undefined, active: r.active === 1, at: r.at };
+}
+
+export function firingHooks(segment: string, event: string): Hook[] {
+  return (selectHooksFor.all(segment, event) as Parameters<typeof rowToHook>[0][]).map(rowToHook);
+}
+
+export function listHooks(): Hook[] {
+  return (selectAllActiveHooks.all() as Parameters<typeof rowToHook>[0][]).map(rowToHook);
+}
+
+// ─── stats ────────────────────────────────────────────────────────────────
+
 /** Aggregate stats — used by the /api/memory endpoint and the UI panel
  *  later in this phase. */
-export function memoryStats(): { findings: number; notes: number; facts: number; sizeBytes: number } {
-  const f = (db.prepare('SELECT COUNT(*) AS n FROM findings').get() as { n: number }).n;
-  const n = (db.prepare('SELECT COUNT(*) AS n FROM notes').get()    as { n: number }).n;
-  const c = (db.prepare('SELECT COUNT(*) AS n FROM facts').get()    as { n: number }).n;
+export function memoryStats(): {
+  findings: number; notes: number; facts: number;
+  segments: number; entities: number; hooks: number;
+  sizeBytes: number;
+} {
+  const f  = (db.prepare('SELECT COUNT(*) AS n FROM findings').get() as { n: number }).n;
+  const n  = (db.prepare('SELECT COUNT(*) AS n FROM notes').get()    as { n: number }).n;
+  const c  = (db.prepare('SELECT COUNT(*) AS n FROM facts').get()    as { n: number }).n;
+  const s  = (db.prepare('SELECT COUNT(*) AS n FROM segments').get() as { n: number }).n;
+  const e  = (db.prepare('SELECT COUNT(*) AS n FROM register').get() as { n: number }).n;
+  const h  = (db.prepare('SELECT COUNT(*) AS n FROM hooks WHERE active = 1').get() as { n: number }).n;
   let size = 0;
   try {
     const stat = (db.prepare("SELECT page_count * page_size AS size FROM pragma_page_count(), pragma_page_size()").get() as { size: number });
     size = stat.size;
   } catch { /* */ }
-  return { findings: f, notes: n, facts: c, sizeBytes: size };
+  return { findings: f, notes: n, facts: c, segments: s, entities: e, hooks: h, sizeBytes: size };
 }
 
 /** Escape hatch for richer queries (e.g. dashboards, the meta-agent).
