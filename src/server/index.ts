@@ -248,14 +248,52 @@ app.get('/api/screenshots-meta', async () => {
       grouped.set(screenName, { file: name, mtimeMs: stat.mtimeMs, size: stat.size });
     }
   }
-  const present = [...grouped.entries()].map(([screenName, m]) => ({
-    urn: `screen:${screenName}`,
-    screenName,
-    file: m.file,
-    mtimeMs: Math.round(m.mtimeMs),
-    sizeBytes: m.size,
-    isBlank: m.size < BLANK_BYTES,
-  }));
+
+  // Latest screen-validator verdict per screen. The validator emits one
+  // finding per non-ok screen + a single summary every run. Treat any
+  // per-screen finding OLDER than the most recent summary as resolved
+  // (the validator re-judged + didn't re-emit it = ok now).
+  const lastSummary = query<{ at: number }>(
+    `SELECT at FROM findings WHERE agent = 'screen-validator' AND kind = 'capture:summary' ORDER BY at DESC LIMIT 1`,
+  )[0];
+  const summaryAt = lastSummary?.at ?? 0;
+  const verdictRows = query<{ payload_json: string; at: number }>(
+    `SELECT payload_json, at FROM findings
+       WHERE agent = 'screen-validator'
+         AND kind != 'capture:summary'
+         AND payload_json LIKE '%"screen"%'
+       ORDER BY at DESC`,
+  );
+  const latestByScreen = new Map<string, { verdict: string; confidence: number; at: number }>();
+  for (const r of verdictRows) {
+    if (r.at < summaryAt - 1000) break;               // older than current run = resolved
+    let p: { screen?: string; verdict?: string; confidence?: number } = {};
+    try { p = JSON.parse(r.payload_json); } catch { continue; }
+    if (!p.screen || !p.verdict) continue;
+    if (latestByScreen.has(p.screen)) continue;
+    latestByScreen.set(p.screen, {
+      verdict: p.verdict,
+      confidence: typeof p.confidence === 'number' ? p.confidence : 1,
+      at: r.at,
+    });
+  }
+
+  const present = [...grouped.entries()].map(([screenName, m]) => {
+    const v = latestByScreen.get(screenName);
+    // If the file is fresher than the latest verdict, the validator hasn't
+    // re-judged this capture yet → leave verdict undefined (UI shows "ok"
+    // optimistically until the next validator pass).
+    const verdictApplies = v && v.at >= m.mtimeMs - 1000;
+    return {
+      urn: `screen:${screenName}`,
+      screenName,
+      file: m.file,
+      mtimeMs: Math.round(m.mtimeMs),
+      sizeBytes: m.size,
+      isBlank: m.size < BLANK_BYTES,
+      ...(verdictApplies && v ? { verdict: v.verdict, confidence: v.confidence, verdictAt: v.at } : {}),
+    };
+  });
   return { dir: config.screenshotsDir, present };
 });
 

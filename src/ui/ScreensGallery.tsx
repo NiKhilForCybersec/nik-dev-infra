@@ -55,7 +55,40 @@ const EDGE_COLOR: Record<EdgeKind, string> = {
   renders:      '#a4c4ff',
 };
 
-type Meta = { urn: string; screenName: string; file: string; mtimeMs: number; sizeBytes: number; isBlank: boolean };
+type Meta = {
+  urn: string; screenName: string; file: string;
+  mtimeMs: number; sizeBytes: number; isBlank: boolean;
+  /** Latest screen-validator verdict — undefined when the validator hasn't
+   *  re-judged this capture yet (file fresher than last validator pass). */
+  verdict?: 'ok' | 'blank' | 'auth-wall' | 'skeleton-loading' | 'error-state'
+          | 'network-pending' | 'scroll-required' | 'no-capture' | 'failed-nav';
+  confidence?: number;
+  verdictAt?: number;
+};
+
+const VERDICT_LABEL: Record<NonNullable<Meta['verdict']>, string> = {
+  'ok':                'ok',
+  'blank':             'blank',
+  'auth-wall':         'auth wall',
+  'skeleton-loading':  'skeleton',
+  'error-state':       'error',
+  'network-pending':   'pending',
+  'scroll-required':   'scroll',
+  'no-capture':        'no PNG',
+  'failed-nav':        'nav fail',
+};
+
+const VERDICT_COLOR: Record<NonNullable<Meta['verdict']>, string> = {
+  'ok':                'var(--ok, #5fd49a)',
+  'blank':             'var(--warn)',
+  'auth-wall':         'var(--warn)',
+  'skeleton-loading':  'var(--fg-3)',
+  'error-state':       'var(--err)',
+  'network-pending':   'var(--fg-3)',
+  'scroll-required':   'var(--fg-3)',
+  'no-capture':        'var(--fg-3)',
+  'failed-nav':        'var(--warn)',
+};
 
 export function ScreensGallery({ onClose }: { onClose: () => void }) {
   const [screens, setScreens] = useState<Entity[]>([]);
@@ -337,6 +370,16 @@ function ScreenCard({ entity, active, meta, onClick }: {
             {blank
               ? <>blank capture<br />({(meta!.sizeBytes / 1024).toFixed(1)} KB)<br />re-run screenshots</>
               : <>no screenshot<br />docs/screenshots/{entity.label}.png</>}
+          </div>
+        )}
+        {meta?.verdict && meta.verdict !== 'ok' && (
+          <div className="mono" style={{
+            position: 'absolute', top: 4, right: 4,
+            background: 'rgba(0,0,0,0.72)', padding: '2px 5px',
+            borderRadius: 3, fontSize: 9, color: VERDICT_COLOR[meta.verdict],
+            border: `1px solid ${VERDICT_COLOR[meta.verdict]}`,
+          }}>
+            {VERDICT_LABEL[meta.verdict]}{typeof meta.confidence === 'number' ? ` ${Math.round(meta.confidence * 100)}%` : ''}
           </div>
         )}
       </div>
