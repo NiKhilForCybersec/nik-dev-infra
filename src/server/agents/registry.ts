@@ -8,8 +8,9 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { NIK_PATH } from '../claude.ts';
-import { newId } from '../findings.ts';
+import { parseFinding } from '../findings.ts';
 import type { Agent, Finding } from '../types.ts';
+import { RegistryFindingSchema } from './schemas.ts';
 
 const CONTRACTS_DIR = resolve(NIK_PATH, 'web/src/contracts');
 
@@ -35,17 +36,14 @@ export const registryAgent: Agent = {
         const name = m[1];
         if (!name) continue;
         if (seen.has(name)) {
-          findings.push({
-            id: newId(),
-            agent: 'registry',
+          findings.push(parseFinding('registry', {
             kind: 'registry:duplicate',
-            at: Date.now(),
             severity: 'error',
             summary: `Duplicate op/command name: ${name}`,
             file: `web/src/contracts/${file}`,
             suggestion: `Already declared in ${seen.get(name)}. Rename one.`,
             payload: { name, files: [seen.get(name), file] },
-          });
+          }, RegistryFindingSchema));
         }
         seen.set(name, file);
         if (name.startsWith('ui.')) cmdCount++;
@@ -53,15 +51,12 @@ export const registryAgent: Agent = {
       }
     }
 
-    findings.push({
-      id: newId(),
-      agent: 'registry',
+    findings.push(parseFinding('registry', {
       kind: 'registry:summary',
-      at: Date.now(),
       severity: 'info',
       summary: `${opCount + cmdCount} tools registered (${opCount} ops + ${cmdCount} commands)`,
       payload: { opCount, cmdCount, total: opCount + cmdCount },
-    });
+    }, RegistryFindingSchema));
 
     return findings;
   },

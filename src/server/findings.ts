@@ -8,6 +8,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { z } from 'zod';
 import type { AgentRun, Finding } from './types.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -66,4 +67,65 @@ export function onRun(fn: (r: AgentRun) => void): () => void {
 /** Generate a sortable, mostly-unique id. */
 export function newId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Build a schema-rejected Finding for output that isn't even a parseable
+ *  JSON array — distinct from output that parses but fails schema. */
+export function rejectedFinding(agent: string, summary: string, payload?: Record<string, unknown>): Finding {
+  return {
+    id: newId(),
+    agent,
+    kind: 'schema-rejected',
+    at: Date.now(),
+    severity: 'warn',
+    summary,
+    ...(payload ? { payload } : {}),
+  };
+}
+
+/** Validate raw agent output against a Zod schema and return a Finding.
+ *  Malformed output produces a `schema-rejected` finding rather than a
+ *  thrown error — the agent stays alive and the bad payload is logged. */
+export function parseFinding<S extends z.ZodTypeAny>(
+  agent: string,
+  raw: unknown,
+  schema: S,
+): Finding {
+  const r = schema.safeParse(raw);
+  if (r.success) {
+    const f = r.data as {
+      kind: string;
+      severity: 'info' | 'warn' | 'error';
+      summary: string;
+      file?: string;
+      line?: number;
+      suggestion?: string;
+      payload?: Record<string, unknown>;
+    };
+    return {
+      id: newId(),
+      agent,
+      kind: f.kind,
+      at: Date.now(),
+      severity: f.severity,
+      summary: f.summary,
+      ...(f.file ? { file: f.file } : {}),
+      ...(f.line ? { line: f.line } : {}),
+      ...(f.suggestion ? { suggestion: f.suggestion } : {}),
+      ...(f.payload ? { payload: f.payload } : {}),
+    };
+  }
+  const issues = r.error.issues
+    .map((i) => `${i.path.join('.') || '<root>'}: ${i.message}`)
+    .join('; ');
+  console.warn(`[findings] ${agent} produced malformed output:`, issues);
+  return {
+    id: newId(),
+    agent,
+    kind: 'schema-rejected',
+    at: Date.now(),
+    severity: 'warn',
+    summary: `Agent output failed schema validation — ${issues.slice(0, 240)}`,
+    payload: { raw, issues: r.error.issues },
+  };
 }
