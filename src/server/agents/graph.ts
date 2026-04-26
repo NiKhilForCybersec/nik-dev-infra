@@ -82,10 +82,19 @@ function lineAt(text: string, idx: number): number {
   return line;
 }
 
-function parseStringList(src: string, key: string): string[] {
-  const m = src.match(new RegExp(`${key}\\s*:\\s*\\[([^\\]]*)\\]`, 's'));
+/** Pull op references out of a manifest list. Handles both shapes:
+ *    reads: ['hydration.today', 'sleep.recent']    (string literals)
+ *    reads: [hydration.today, sleep.recent]        (TS identifier paths)
+ *  Identifier paths are recognised by `lowercase.lowercase` chains, which
+ *  is the convention Nik (and most TS codebases) use for op names. */
+function parseOpRefs(src: string, key: string): string[] {
+  const m = src.match(new RegExp(`${key}\\s*:\\s*\\[([\\s\\S]*?)\\]`));
   if (!m) return [];
-  return [...m[1]!.matchAll(/['"]([\w.]+)['"]/g)].map((x) => x[1]!);
+  const inner = m[1]!;
+  const out = new Set<string>();
+  for (const x of inner.matchAll(/['"]([\w.]+\.\w+)['"]/g)) out.add(x[1]!);
+  for (const x of inner.matchAll(/\b([a-z][\w]*\.[a-zA-Z][\w]*)\b/g)) out.add(x[1]!);
+  return [...out];
 }
 
 const LLM_PACKAGES: Array<{ pkg: RegExp; provider: string }> = [
@@ -169,12 +178,39 @@ export const graphAgent: Agent = {
       const manifestPath = file.replace(/\.tsx$/, '.manifest.ts');
       if (existsSync(manifestPath)) {
         const src = readFileSync(manifestPath, 'utf8');
-        for (const op of parseStringList(src, 'reads'))       addEdge({ from: screenId, to: `op:${op}`,  kind: 'reads',      file: rel(manifestPath) });
-        for (const op of parseStringList(src, 'writes'))      addEdge({ from: screenId, to: `op:${op}`,  kind: 'writes',     file: rel(manifestPath) });
-        for (const cmd of parseStringList(src, 'dispatches')) addEdge({ from: screenId, to: `cmd:${cmd}`, kind: 'dispatches', file: rel(manifestPath) });
+        for (const op of parseOpRefs(src, 'reads'))    addEdge({ from: screenId, to: `op:${op}`,   kind: 'reads',      file: rel(manifestPath) });
+        for (const op of parseOpRefs(src, 'writes'))   addEdge({ from: screenId, to: `op:${op}`,   kind: 'writes',     file: rel(manifestPath) });
+        // Nik manifests use `commands:` (not `dispatches:`); also accept
+        // the older key for forward-compat.
+        for (const cmd of parseOpRefs(src, 'commands'))    addEdge({ from: screenId, to: `cmd:${cmd}`, kind: 'dispatches', file: rel(manifestPath) });
+        for (const cmd of parseOpRefs(src, 'dispatches')) addEdge({ from: screenId, to: `cmd:${cmd}`, kind: 'dispatches', file: rel(manifestPath) });
       }
 
       const tsx = readFileSync(file, 'utf8');
+
+      // Inline useOp / useOpMutation calls inside the screen JSX. Backstop
+      // for screens whose manifest is missing or out of date — and for the
+      // case where the screen calls an op that's NOT declared in the
+      // manifest (which is itself a drift signal).
+      // Pattern: useOp(<alias>.<field>, ...) or useOpMutation(<alias>.<field>, ...)
+      // The alias-to-canonical normalization happens via op-name suffix
+      // matching when the op is later resolved against the contracts.
+      for (const m of tsx.matchAll(/use(?:Op|OpMutation|Mutation)\s*\(\s*([a-zA-Z_][\w]*)\.([a-zA-Z_][\w]*)/g)) {
+        const alias = m[1]!;
+        const field = m[2]!;
+        // Heuristic op name: alias's lowercased prefix + field. We strip a
+        // trailing 'Ops' or 'Op' suffix from the alias (e.g. hydrationOps → hydration).
+        const stem = alias.replace(/Ops?$/i, '').replace(/^[A-Z]/, (c) => c.toLowerCase());
+        const opName = `${stem}.${field}`;
+        const isMutation = m[0].includes('Mutation');
+        addEdge({ from: screenId, to: `op:${opName}`, kind: isMutation ? 'writes' : 'reads', file: rel(file), line: lineAt(tsx, m.index!) });
+      }
+
+      // useCommand('command.name', …) — string-literal command name
+      for (const m of tsx.matchAll(/useCommand\s*\(\s*['"]([\w.]+)['"]/g)) {
+        addEdge({ from: screenId, to: `cmd:${m[1]!}`, kind: 'dispatches', file: rel(file), line: lineAt(tsx, m.index!) });
+      }
+
       const navTargets = new Set<string>();
       for (const m of tsx.matchAll(/onNav\(\s*['"]([\w-]+)['"]\s*\)/g))      navTargets.add(m[1]!);
       for (const m of tsx.matchAll(/state\.screen\s*=\s*['"]([\w-]+)['"]/g)) navTargets.add(m[1]!);
