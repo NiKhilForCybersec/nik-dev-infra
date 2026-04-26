@@ -13,7 +13,7 @@ import { minimatch } from 'minimatch';
 import { AGENTS, RISK_CLASS_BY_AGENT } from './agents/index.ts';
 import { config } from './config.ts';
 import { emit, emitRun, newId, onFinding } from './findings.ts';
-import { entities, firingHooks, lookup } from './memory.ts';
+import { addHook, entities, firingHooks, lookup } from './memory.ts';
 import { startWatcher } from './watcher.ts';
 import type { Agent, Finding } from './types.ts';
 
@@ -208,7 +208,38 @@ function fireEvent(segment: string, event: string, payload?: Record<string, unkn
   } as Finding);
 }
 
+/** Default L6 hook subscriptions (closes the "lifecycle hooks have no
+ *  subscribers" self-concern). Idempotent — addHook upserts on
+ *  (segment, event, agent), so calling on every boot is a no-op when
+ *  the rows already exist. The orchestrator's fireEvent() routes
+ *  triggers through these.
+ *
+ *  Note: segment='*' is the wildcard. Lifecycle events like 'timeout'
+ *  fire on segment='agent/<name>'; the '*' subscription matches
+ *  because firingHooks() OR's with the literal '*' value. */
+function setupDefaultHooks(): void {
+  // When ANY agent times out → trigger self-monitor for real-time
+  // visibility (don't wait for the 15-min interval to surface the
+  // p95 / failure-rate anomaly).
+  addHook({
+    segment: '*',
+    event: 'timeout',
+    agent: 'self-monitor',
+    promptFragment: 'A peer agent just timed out — sweep the runs table for the offender.',
+  });
+  // When ANY agent errors → trigger memory-keeper for an integrity
+  // sweep (something might have written half a fact / orphan the
+  // register).
+  addHook({
+    segment: '*',
+    event: 'error',
+    agent: 'memory-keeper',
+    promptFragment: 'An agent just errored — re-run integrity checks in case state was left half-written.',
+  });
+}
+
 export function startOrchestrator(): void {
+  setupDefaultHooks();
   // 1. Initial run of every agent on boot (so the UI has data immediately).
   for (const a of AGENTS) void runAgent(a);
 
