@@ -41,10 +41,17 @@
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseJsonArray, runClaude } from '../claude.ts';
 import { config } from '../config.ts';
 import { newId } from '../findings.ts';
 import { isPromoted, query, recordPromotion } from '../memory.ts';
 import type { Agent, Finding } from '../types.ts';
+import { parseFinding, rejectedFinding } from '../findings.ts';
+import { CuratorFindingSchema } from './schemas.ts';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const AUDIT_PROMPT_BASE = readFileSync(resolve(here, 'curator-audit.md'), 'utf8');
 
 // ─── helpers ──────────────────────────────────────────────────────────────
 
@@ -368,6 +375,69 @@ export const curatorAgent: Agent = {
         summary: `${suppressedCount} suppressed across ${suppressedByReason.size} reason${suppressedByReason.size === 1 ? '' : 's'} — top: ${topSuppressedReasons.map(([k, n]) => `${k} ×${n}`).join(' · ').slice(0, 240)}`,
         payload: { byReason: Object.fromEntries(suppressedByReason) },
       });
+    }
+
+    // ── AUDIT PASS (D.5.5) ───────────────────────────────────────────────
+    // The new primary curator job: read the user's existing Concerns.md
+    // and judge each entry against the actual code. We never invent NEW
+    // concerns here — that's the promote-pass above for security only.
+    // Audit verdicts surface as findings; when writeback.enabled is on,
+    // unaddressed entries get an in-place ⚠ annotation appended under
+    // them (NOT a new bullet at the bottom).
+    const concernsPath = resolve(config.targetPath, config.concernsFile);
+    if (!existsSync(concernsPath)) {
+      out.push({
+        id: newId(),
+        agent: 'curator',
+        kind: 'curator:audit-no-concerns-file',
+        at: now,
+        severity: 'info',
+        summary: `no ${config.concernsFile} in target — nothing to audit`,
+      });
+    } else {
+      const concernsBody = readFileSync(concernsPath, 'utf8');
+      if (concernsBody.trim().length === 0) {
+        out.push({
+          id: newId(),
+          agent: 'curator',
+          kind: 'curator:audit-no-concerns-file',
+          at: now,
+          severity: 'info',
+          summary: `${config.concernsFile} is empty — nothing to audit`,
+        });
+      } else {
+        const auditPrompt = `${AUDIT_PROMPT_BASE}
+
+---
+
+## Input — current contents of ${config.concernsFile}
+
+\`\`\`markdown
+${concernsBody.slice(0, 12_000)}
+\`\`\`
+`;
+        try {
+          const r = await runClaude({ prompt: auditPrompt, timeoutMs: 180_000 });
+          const raw = parseJsonArray<unknown>(r.text);
+          if (raw === null) {
+            if (r.text.trim().length > 0) out.push(rejectedFinding('curator', 'audit output not a parseable JSON array', { textPreview: r.text.slice(0, 500) }));
+          } else {
+            for (const item of raw.slice(0, 30)) {
+              out.push(parseFinding('curator', item, CuratorFindingSchema));
+            }
+          }
+        } catch (e) {
+          out.push({
+            id: newId(),
+            agent: 'curator',
+            kind: 'curator:audit-uncertain',
+            at: now,
+            severity: 'info',
+            summary: `audit pass failed: ${(e as Error).message}`,
+            payload: { error: (e as Error).message },
+          });
+        }
+      }
     }
 
     out.push({

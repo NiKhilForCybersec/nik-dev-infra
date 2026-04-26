@@ -178,6 +178,14 @@ export const CuratorFindingSchema = Base.extend({
     'curator:write-disabled',
     'curator:write-failed',
     'curator:claudemd-updated',
+    // Audit-mode kinds (D.5.5) — verdicts on each existing Concerns.md entry
+    'curator:concern-resolved',
+    'curator:concern-unaddressed',
+    'curator:concern-easy-pathed',
+    'curator:concern-stale',
+    'curator:concern-still-open',
+    'curator:audit-uncertain',
+    'curator:audit-no-concerns-file',
   ]),
 });
 
