@@ -21,6 +21,7 @@ import { memoryKeeperAgent } from './memory-keeper.ts';
 import { navigationAgent } from './navigation.ts';
 import { proberAgent } from './prober.ts';
 import { registryAgent } from './registry.ts';
+import { screenProberAgent } from './screen-prober.ts';
 import { screenValidatorAgent } from './screen-validator.ts';
 import { screenshotsAgent } from './screenshots.ts';
 import { secretsAgent } from './secrets.ts';
@@ -42,6 +43,7 @@ export const ALL_AGENTS: Agent[] = [
   proberAgent,          // deterministic — runtime endpoint reachability + p95
   screenshotsAgent,     // deterministic — watches screenshots folder + prunes
   screenValidatorAgent, // deterministic — Layer-1 validation of every capture (sidecar + 7 checks)
+  screenProberAgent,    // deterministic — spawns Playwright capture script (active capturer)
   snapshotterAgent,     // deterministic — atomic memory.db backups every 6h
   selfAwarenessAgent,   // deterministic — dev-infra describes itself in memory
   selfMonitorAgent,     // deterministic — per-agent latency / error / schema-rej metrics
@@ -84,6 +86,7 @@ export const RISK_CLASS_BY_AGENT: Record<string, RiskClass> = {
   'memory-keeper': 'write-memory',
   screenshots:     'write-user-repo',  // unlinkSync of PNGs in <repo>/docs/screenshots — gated by riskGate.allowWriteUserRepo
   'screen-validator':'write-memory',   // pure read of PNGs + sidecars; emits findings only
+  'screen-prober': 'external-call',    // spawns Playwright; outbound HTTP to dev server. PNG writes go to a generated-artifact folder, not source — same shape as test logs.
   snapshotter:     'write-memory',     // writes to data/snapshots/, prunes own archives
   'self-awareness':'write-memory',
   'self-monitor':  'write-memory',

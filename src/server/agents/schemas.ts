@@ -214,6 +214,17 @@ export const CuratorFindingSchema = Base.extend({
   ]),
 });
 
+export const ScreenProberFindingSchema = Base.extend({
+  kind: z.enum([
+    'screen-prober:run-complete',
+    'screen-prober:run-failed',
+    'screen-prober:precondition-failed',
+    'screen-prober:dev-server-down',
+    'screen-prober:not-applicable',
+    'screen-prober:debounced',
+  ]),
+});
+
 export const ScreenshotsFindingSchema = Base.extend({
   kind: z.enum([
     'screenshots:summary',
@@ -322,6 +333,7 @@ export const SCHEMA_BY_AGENT = {
   orchestrator: OrchestratorFindingSchema,
   screenshots: ScreenshotsFindingSchema,
   'screen-validator': ScreenValidatorFindingSchema,
+  'screen-prober': ScreenProberFindingSchema,
   snapshotter: SnapshotterFindingSchema,
   curator: CuratorFindingSchema,
   bindings: BindingsFindingSchema,
