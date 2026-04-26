@@ -125,6 +125,15 @@ export const BootstrapFindingSchema = Base.extend({
   ]),
 });
 
+export const BindingsFindingSchema = Base.extend({
+  kind: z.enum([
+    'binding:found',
+    'binding:dynamic',
+    'binding:uncertain',
+    'binding:no-source',
+  ]),
+});
+
 export const CuratorFindingSchema = Base.extend({
   kind: z.enum([
     'curator:summary',
@@ -213,6 +222,7 @@ export const SCHEMA_BY_AGENT = {
   orchestrator: OrchestratorFindingSchema,
   screenshots: ScreenshotsFindingSchema,
   curator: CuratorFindingSchema,
+  bindings: BindingsFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;
