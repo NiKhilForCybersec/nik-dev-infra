@@ -44,6 +44,10 @@ const ConfigSchema = z.object({
   manifestsGlob: z.string().nullable(),
   /** Glob for SQL migrations, relative to targetPath. Null if not used. */
   migrationsGlob: z.string().nullable(),
+  /** Directories containing backend handlers (Supabase functions, Next API routes, Express, etc.). */
+  backendDirs: z.array(z.string()),
+  /** Globs containing frontend code to scan for fetch() calls + LLM SDK imports. */
+  frontendGlobs: z.array(z.string()),
   /** Concerns markdown file, relative to targetPath. */
   concernsFile: z.string(),
   /** CLAUDE.md file, relative to targetPath. */
@@ -70,6 +74,8 @@ const DEFAULT_CONFIG: DevInfraConfig = {
   screensGlob: 'web/src/screens/*Screen.tsx',
   manifestsGlob: 'web/src/screens/*.manifest.ts',
   migrationsGlob: 'supabase/migrations/*.sql',
+  backendDirs: ['supabase/functions', 'app/api', 'pages/api', 'src/api', 'src/server', 'server'],
+  frontendGlobs: ['web/src/**/*.{ts,tsx}', 'src/**/*.{ts,tsx}'],
   concernsFile: 'docs/Concerns.md',
   claudeMdFile: 'CLAUDE.md',
   agentsToEnable: null,

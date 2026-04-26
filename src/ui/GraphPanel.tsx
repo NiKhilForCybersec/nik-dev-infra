@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 
-type NodeType = 'screen' | 'op' | 'cmd';
-type EdgeKind = 'reads' | 'writes' | 'dispatches' | 'navigates_to';
+type NodeType = 'screen' | 'op' | 'cmd' | 'endpoint' | 'llm_provider';
+type EdgeKind = 'reads' | 'writes' | 'dispatches' | 'navigates_to' | 'calls' | 'invokes_llm';
 type Node = { id: string; type: NodeType; label: string; file?: string };
 type Edge = { from: string; to: string; kind: EdgeKind };
 type Graph = { nodes: Node[]; edges: Edge[]; builtAt: number };
 
 const EDGE_COLOR: Record<EdgeKind, string> = {
-  reads: 'var(--info)',
-  writes: 'var(--warn)',
-  dispatches: 'var(--accent)',
+  reads:        'var(--info)',
+  writes:       'var(--warn)',
+  dispatches:   'var(--accent)',
   navigates_to: 'var(--ok)',
+  calls:        '#c389ff',
+  invokes_llm:  '#ff9bd2',
 };
 
 export function GraphPanel({ onClose }: { onClose: () => void }) {
@@ -99,7 +101,7 @@ export function GraphPanel({ onClose }: { onClose: () => void }) {
                   </div>
                   {edges.length > 0 ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 6 }}>
-                      {(['reads', 'writes', 'dispatches', 'navigates_to'] as EdgeKind[]).map((kind) => {
+                      {(['reads', 'writes', 'dispatches', 'navigates_to', 'calls', 'invokes_llm'] as EdgeKind[]).map((kind) => {
                         const ks = edges.filter((e) => e.kind === kind);
                         if (ks.length === 0) return null;
                         return (
@@ -128,7 +130,7 @@ export function GraphPanel({ onClose }: { onClose: () => void }) {
 function Legend() {
   return (
     <div className="mono" style={{ display: 'flex', gap: 10, fontSize: 10 }}>
-      {(['reads', 'writes', 'dispatches', 'navigates_to'] as EdgeKind[]).map((k) => (
+      {(['reads', 'writes', 'dispatches', 'navigates_to', 'calls', 'invokes_llm'] as EdgeKind[]).map((k) => (
         <span key={k} style={{ color: EDGE_COLOR[k] }}>● {k}</span>
       ))}
     </div>
