@@ -92,6 +92,15 @@ export const LlmCostFindingSchema = Base.extend({
   ]),
 });
 
+export const SyncFindingSchema = Base.extend({
+  kind: z.enum([
+    'sync:different-op',
+    'sync:live-vs-hardcoded',
+    'sync:different-formula',
+    'sync:stale-alias',
+  ]),
+});
+
 export type RawFinding = z.infer<typeof Base>;
 
 export const SCHEMA_BY_AGENT = {
@@ -104,6 +113,7 @@ export const SCHEMA_BY_AGENT = {
   concerns: ConcernsFindingSchema,
   graph: GraphFindingSchema,
   'llm-cost': LlmCostFindingSchema,
+  sync: SyncFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;

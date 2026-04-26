@@ -11,6 +11,7 @@ import { healthAgent } from './health.ts';
 import { llmCostAgent } from './llm-cost.ts';
 import { navigationAgent } from './navigation.ts';
 import { registryAgent } from './registry.ts';
+import { syncAgent } from './sync.ts';
 
 export const AGENTS: Agent[] = [
   registryAgent,    // deterministic — always works
@@ -22,4 +23,5 @@ export const AGENTS: Agent[] = [
   hardcodedAgent,   // claude -p
   databaseAgent,    // claude -p (high reasoning; rare runs)
   concernsAgent,    // claude -p (small) — reads docs/Concerns.md
+  syncAgent,        // claude -p — cross-screen value consistency
 ];
