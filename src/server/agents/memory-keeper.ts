@@ -248,7 +248,25 @@ export const memoryKeeperAgent: Agent = {
     const stats = memoryStats();
     const phase = getPhase();
     if (phase === 'bootstrapping') {
-      const ready = overall >= 95 && segmentsTotal >= 5 && stats.wikiPages >= 5;
+      // Adaptive thresholds: a small repo may never accumulate 5+
+      // segments worth clustering. Scale segment + wiki minima with
+      // entity count so small projects can flip live too. Overall %
+      // floor stays at 95% always — quality bar doesn't relax.
+      const e = entitiesTotal;
+      let minSegments: number, minWikiPages: number, minOverall: number;
+      if (e < 10) {
+        // Tiny repo: just require quality. Segments + wiki are nice-to-have.
+        minSegments = 0; minWikiPages = 0; minOverall = 80;
+      } else if (e < 50) {
+        // Small repo: scaled requirements.
+        minSegments = Math.max(2, Math.floor(e / 12));
+        minWikiPages = Math.max(2, Math.floor(e / 12));
+        minOverall = 90;
+      } else {
+        // Standard repo: full thresholds.
+        minSegments = 5; minWikiPages = 5; minOverall = 95;
+      }
+      const ready = overall >= minOverall && segmentsTotal >= minSegments && stats.wikiPages >= minWikiPages;
       if (ready) {
         setPhase('live');
         findings.push({
@@ -257,8 +275,8 @@ export const memoryKeeperAgent: Agent = {
           kind: 'phase:live-ready',
           at: now,
           severity: 'info',
-          summary: `bootstrap complete · model at ${overall}% completeness with ${segmentsTotal} segments + ${stats.wikiPages} wiki pages — flipping to live mode`,
-          payload: { overall_pct: overall, segments: segmentsTotal, wikiPages: stats.wikiPages },
+          summary: `bootstrap complete · model at ${overall}% completeness with ${segmentsTotal} segments + ${stats.wikiPages} wiki pages (gate: ≥${minOverall}% + ≥${minSegments} + ≥${minWikiPages} for ${e} entities) — flipping to live mode`,
+          payload: { overall_pct: overall, segments: segmentsTotal, wikiPages: stats.wikiPages, gate: { minOverall, minSegments, minWikiPages, entities: e } },
         });
       } else {
         findings.push({
@@ -267,8 +285,8 @@ export const memoryKeeperAgent: Agent = {
           kind: 'phase:bootstrapping',
           at: now,
           severity: 'info',
-          summary: `bootstrapping · ${overall}% complete · ${segmentsTotal} segments · ${stats.wikiPages} wiki pages (need ≥95% + ≥5 + ≥5 to flip live)`,
-          payload: { overall_pct: overall, segments: segmentsTotal, wikiPages: stats.wikiPages },
+          summary: `bootstrapping · ${overall}% complete · ${segmentsTotal} segments · ${stats.wikiPages} wiki pages (need ≥${minOverall}% + ≥${minSegments} + ≥${minWikiPages} for ${e}-entity repo)`,
+          payload: { overall_pct: overall, segments: segmentsTotal, wikiPages: stats.wikiPages, gate: { minOverall, minSegments, minWikiPages, entities: e } },
         });
       }
     }
