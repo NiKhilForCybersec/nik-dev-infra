@@ -67,13 +67,17 @@ export const memoryKeeperAgent: Agent = {
     const knownAgents = new Set(ALL_AGENTS.map((a) => a.name));
 
     // ── 1. Orphan facts: subject or object URN not in register ───────────
-    const orphanSubjects = query<{ subject: string; n: number }>(`
+    // Gate orphan flagging on phase: during bootstrap the register is
+    // still being populated, so transient orphans are normal noise.
+    // Once the system is live, orphans are real drift signal.
+    const phaseNow = getPhase();
+    const orphanSubjects = phaseNow === 'live' ? query<{ subject: string; n: number }>(`
       SELECT subject, COUNT(*) AS n FROM facts
       WHERE subject NOT IN (SELECT urn FROM register)
       GROUP BY subject
       ORDER BY n DESC
       LIMIT 5
-    `);
+    `) : [];
     for (const row of orphanSubjects) {
       findings.push({
         id: newId(),
@@ -86,13 +90,13 @@ export const memoryKeeperAgent: Agent = {
       });
     }
 
-    const orphanObjects = query<{ object: string; n: number }>(`
+    const orphanObjects = phaseNow === 'live' ? query<{ object: string; n: number }>(`
       SELECT object, COUNT(*) AS n FROM facts
       WHERE object NOT IN (SELECT urn FROM register)
       GROUP BY object
       ORDER BY n DESC
       LIMIT 5
-    `);
+    `) : [];
     for (const row of orphanObjects) {
       findings.push({
         id: newId(),

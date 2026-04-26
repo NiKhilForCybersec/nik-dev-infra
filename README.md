@@ -21,24 +21,67 @@ npm start
 
 Open the UI, then edit any file under the watched repo. Findings appear in real time.
 
-## Agents (12 shipped)
+## Agents (22 shipped)
 
-| Agent          | What it answers                                                              | Powered by    |
-|----------------|------------------------------------------------------------------------------|---------------|
-| registry       | How many ops + commands? Any duplicate names?                                | deterministic |
-| health         | Are Anthropic / OpenAI / Supabase / MCP reachable? p95 latency?              | deterministic |
-| graph          | What's the project topology — screens → ops → cmds → navigation?             | deterministic |
-| llm-cost       | Did any LLM call breach the cost threshold? Daily spend vs budget?           | deterministic |
-| secrets        | Any committed API keys / private keys in tracked files?                      | deterministic |
-| drift          | What manifest declarations don't match JSX usage?                            | claude -p     |
-| navigation     | Does any onNav('xxx') target a screen that doesn't exist?                    | claude -p     |
-| hardcoded      | What JSX literals look like fake/demo data instead of real ops?              | claude -p     |
-| database       | Contract↔migration drift; missing RLS; missing user_id index                 | claude -p     |
-| concerns       | Open vs resolved entries in `<repo>/docs/Concerns.md`; route to right agent  | claude -p     |
-| sync           | Same metric on two screens with disagreeing values?                          | claude -p     |
-| accessibility  | Icon-only buttons, color-only state, missing alts, keyboard traps            | claude -p     |
+**Deterministic (no LLM):**
 
-Roadmap: persistent memory layer (SQLite + per-agent markdown notebooks), bootstrap pass that builds a 100%-confident project model, write-back to `<repo>/docs/Concerns.md` + consent-gated `CLAUDE.md` line, meta-agent that learns from past findings, and `npx <name> <repo>` generalization.
+| Agent           | What it answers                                                              |
+|-----------------|------------------------------------------------------------------------------|
+| registry        | How many ops + commands? Any duplicate names?                                |
+| health          | Are Anthropic / OpenAI / Supabase / MCP reachable? p95 latency?              |
+| graph           | Project topology — screens, ops, cmds, endpoints, llm-providers, tables, components, all the edges between them |
+| llm-cost        | Did any LLM call breach the cost threshold? Daily spend vs budget?           |
+| secrets         | Any committed API keys / private keys in tracked files?                      |
+| memory-keeper   | Memory layer integrity, completeness %, vacuum + prune                       |
+| mcp             | MCP server tool discovery + diff over time                                   |
+| prober          | Runtime endpoint reachability + p95 latency                                  |
+| screenshots     | Watches docs/screenshots/ folder, registers as `has_screenshot` facts        |
+| self-awareness  | Reads our own code; describes dev-infra's structure into the meta/self wiki  |
+| self-monitor    | Per-agent latency / error rate / schema-rejection rate over 24h              |
+
+**LLM-driven (`claude -p`):**
+
+| Agent           | What it answers                                                              |
+|-----------------|------------------------------------------------------------------------------|
+| drift           | Manifest ↔ JSX wiring drift                                                  |
+| navigation      | Broken onNav targets, missing route handlers, wrong tile destinations        |
+| hardcoded       | JSX literals masquerading as live user data                                  |
+| database        | Contract ↔ migration drift, missing RLS, missing user_id indexes             |
+| concerns        | Classify entries in user's Concerns.md; route each to the right agent        |
+| sync            | Same metric, two screens, disagreeing values (live vs hardcoded, etc.)       |
+| accessibility   | Icon-only buttons, color-only state, missing alts, tap target size           |
+| bindings        | Pin each JSX dynamic value to the exact op.field it reads                    |
+| ai-coverage     | Every manual write/command has a matching aiAffordances phrase?              |
+| bootstrap       | Cluster register entities into segments, seed the meta wiki                  |
+| doc-ingest      | Read README + vision/architecture docs into the meta/intent wiki             |
+| self-improve    | Propose prompt diffs for self-monitor-flagged problem agents (gated)         |
+| **curator**     | Cross-verify before any user-repo write; audit Concerns.md + Resolutions.md  |
+
+## Memory layers (L0 → L8)
+
+| Layer | What | Status |
+|---|---|---|
+| L0 findings | append-only event log + ring buffer + JSONL on disk | ✅ |
+| L1 facts + notes | (subject,predicate,object) triples + per-agent kv | ✅ |
+| L2/L3 segments | slash-pathed product partitions (auth/oauth/github) | ✅ |
+| L4 wiki | machine-written, human-editable markdown per (segment, topic), Obsidian-vault-friendly | ✅ |
+| L5 register | URN-keyed canonical entity catalog | ✅ |
+| L6 hooks | (segment, event) → agent subscriptions; wildcard matching | ✅ |
+| L7 vector | semantic recall — pending until corpus warrants | ⏸ |
+| L8 snapshots | periodic memory.db archives | ⏸ |
+
+## Hard-path discipline
+
+Every agent prompt opens with: "Hard path, never happy path. Below 100% confidence, don't emit." Every fact has confidence 1.0 only with file evidence. The curator runs cross-verification rules before any concern hits the user's repo, and write-back is consent-gated (default off).
+
+## Roadmap
+
+- Setup wizard for first-run target picker
+- Bootstrap progress UI (completeness % + ETA)
+- Playwright screen-mount probes (runtime verification of UI wirings)
+- L8 snapshots
+- Phase 4 meta-agent (learns from past findings)
+- Phase 5: `npx nik-dev-infra <repo>` for any TypeScript project
 
 ## Why standalone
 
