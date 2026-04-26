@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AgentMetrics } from './AgentMetrics';
+import { GraphPanel } from './GraphPanel';
 
 type Severity = 'info' | 'warn' | 'error';
 
@@ -47,6 +48,7 @@ export function App() {
   const [filterSev, setFilterSev] = useState<'all' | Severity>('all');
   const [lastLiveAt, setLastLiveAt] = useState<number | null>(null);
   const [liveCount, setLiveCount] = useState(0);
+  const [graphOpen, setGraphOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -114,21 +116,28 @@ export function App() {
           </div>
           <div style={{ fontSize: 22, fontWeight: 600, marginTop: 2 }}>Live agent findings</div>
         </div>
-        <div className="mono" style={{ fontSize: 11, color: connected ? 'var(--ok)' : 'var(--err)', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span
-            className={livePulse ? 'live-pulse' : ''}
-            style={{
-              width: 8, height: 8, borderRadius: '50%',
-              background: connected ? 'var(--ok)' : 'var(--err)',
-              boxShadow: connected ? '0 0 6px var(--ok)' : 'none',
-            }}
-          />
-          {connected ? 'CONNECTED · WS' : 'RECONNECTING…'}
-          {connected && lastLiveAt !== null && (
-            <span style={{ color: 'var(--fg-3)', marginLeft: 4 }}>
-              · {liveCount} live event{liveCount === 1 ? '' : 's'}
-            </span>
-          )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <button
+            onClick={() => setGraphOpen(true)}
+            className="mono"
+            style={{ padding: '4px 10px', fontSize: 10, letterSpacing: 1, color: 'var(--fg-2)' }}
+          >GRAPH</button>
+          <div className="mono" style={{ fontSize: 11, color: connected ? 'var(--ok)' : 'var(--err)', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span
+              className={livePulse ? 'live-pulse' : ''}
+              style={{
+                width: 8, height: 8, borderRadius: '50%',
+                background: connected ? 'var(--ok)' : 'var(--err)',
+                boxShadow: connected ? '0 0 6px var(--ok)' : 'none',
+              }}
+            />
+            {connected ? 'CONNECTED · WS' : 'RECONNECTING…'}
+            {connected && lastLiveAt !== null && (
+              <span style={{ color: 'var(--fg-3)', marginLeft: 4 }}>
+                · {liveCount} live event{liveCount === 1 ? '' : 's'}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -216,6 +225,8 @@ export function App() {
           );
         })()}
       </div>
+
+      {graphOpen && <GraphPanel onClose={() => setGraphOpen(false)} />}
     </div>
   );
 }

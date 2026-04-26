@@ -8,4 +8,6 @@ dist/
 
 # Append-only findings log (regeneratable; user-machine-specific)
 data/findings.jsonl
+data/findings.*.jsonl
 data/state.json
+data/graph.json

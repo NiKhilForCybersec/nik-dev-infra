@@ -3,10 +3,16 @@
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify from 'fastify';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { AGENTS } from './agents/index.ts';
 import { onFinding, onRun, snapshot } from './findings.ts';
 import { startOrchestrator } from './orchestrator.ts';
 import type { ServerEvent } from './types.ts';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const GRAPH_FILE = resolve(here, '../../data/graph.json');
 
 const PORT = Number(process.env.PORT ?? 5175);
 const HOST = process.env.HOST ?? '127.0.0.1';
@@ -22,6 +28,16 @@ app.get('/api/snapshot', async () => {
     ...snap,
     agents: AGENTS.map((a) => ({ name: a.name, description: a.description })),
   };
+});
+
+// REST: project topology graph (built by the graph agent).
+app.get('/api/graph', async (_req, reply) => {
+  if (!existsSync(GRAPH_FILE)) {
+    reply.code(404);
+    return { error: 'graph not yet built — wait for the graph agent to complete one run' };
+  }
+  reply.header('content-type', 'application/json');
+  return readFileSync(GRAPH_FILE, 'utf8');
 });
 
 // WebSocket: live feed.

@@ -77,6 +77,13 @@ export const ConcernsFindingSchema = Base.extend({
   ]),
 });
 
+export const GraphFindingSchema = Base.extend({
+  kind: z.enum([
+    'graph:built',
+    'graph:no-source',
+  ]),
+});
+
 export type RawFinding = z.infer<typeof Base>;
 
 export const SCHEMA_BY_AGENT = {
@@ -87,6 +94,7 @@ export const SCHEMA_BY_AGENT = {
   database: DatabaseFindingSchema,
   health: HealthFindingSchema,
   concerns: ConcernsFindingSchema,
+  graph: GraphFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;
