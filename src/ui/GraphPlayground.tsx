@@ -5,8 +5,8 @@ import fcose from 'cytoscape-fcose';
 
 cytoscape.use(fcose);
 
-type NodeType = 'screen' | 'op' | 'cmd' | 'endpoint' | 'llm_provider' | 'mcp_server' | 'mcp_tool';
-type EdgeKind = 'reads' | 'writes' | 'dispatches' | 'navigates_to' | 'calls' | 'invokes_llm' | 'tool_of';
+type NodeType = 'screen' | 'op' | 'cmd' | 'endpoint' | 'llm_provider' | 'mcp_server' | 'mcp_tool' | 'table' | 'component';
+type EdgeKind = 'reads' | 'writes' | 'dispatches' | 'navigates_to' | 'calls' | 'invokes_llm' | 'tool_of' | 'persists_to' | 'renders';
 
 type Node = { id: string; type: NodeType; label: string; file?: string };
 type Edge = { from: string; to: string; kind: EdgeKind; file?: string; line?: number };
@@ -31,6 +31,8 @@ const NODE_COLOR: Record<NodeType, string> = {
   llm_provider: '#ff9bd2',
   mcp_server:   '#ffe066',
   mcp_tool:     '#fff0a3',
+  table:        '#5fd49a',
+  component:    '#a4c4ff',
 };
 
 const EDGE_COLOR: Record<EdgeKind, string> = {
@@ -41,6 +43,8 @@ const EDGE_COLOR: Record<EdgeKind, string> = {
   calls:        '#c389ff',
   invokes_llm:  '#ff9bd2',
   tool_of:      '#ffe066',
+  persists_to:  '#5fd49a',
+  renders:      '#a4c4ff',
 };
 
 type Status = 'ok' | 'warn' | 'error' | 'unknown';

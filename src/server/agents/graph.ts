@@ -39,8 +39,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = resolve(here, '../../../data');
 const GRAPH_FILE = resolve(DATA_DIR, 'graph.json');
 
-type NodeType = 'screen' | 'op' | 'cmd' | 'endpoint' | 'llm_provider';
-type EdgeKind = 'reads' | 'writes' | 'dispatches' | 'navigates_to' | 'calls' | 'invokes_llm';
+type NodeType = 'screen' | 'op' | 'cmd' | 'endpoint' | 'llm_provider' | 'table' | 'component';
+type EdgeKind = 'reads' | 'writes' | 'dispatches' | 'navigates_to' | 'calls' | 'invokes_llm' | 'persists_to' | 'renders';
 type Node = { id: string; type: NodeType; label: string; file?: string };
 type Edge = { from: string; to: string; kind: EdgeKind; file?: string; line?: number };
 
@@ -156,14 +156,52 @@ export const graphAgent: Agent = {
       });
     };
 
-    // ── Contracts → ops + commands ───────────────────────────────────────
+    // ── Contracts → ops + commands + persists_to ─────────────────────────
     const contractsDir = config.contractsDir ? resolve(config.targetPath, config.contractsDir) : null;
     if (contractsDir) for (const file of listFilesIn(contractsDir, (f) => f.endsWith('.ts') && f !== 'index.ts')) {
       const src = readFileSync(file, 'utf8');
+
+      // Tables this contract file persists to (Supabase pattern: `.from('<table>')`).
+      const tablesInFile = new Set<string>();
+      for (const t of src.matchAll(/\.from\s*\(\s*['"]([a-z_][\w]*)['"]\s*\)/g)) tablesInFile.add(t[1]!);
+
       for (const m of src.matchAll(/name:\s*['"]([\w.]+)['"]/g)) {
         const name = m[1]!;
         const type: NodeType = name.startsWith('ui.') ? 'cmd' : 'op';
-        addNode({ id: `${type}:${name}`, type, label: name, file: rel(file) });
+        const opUrn = `${type}:${name}`;
+        addNode({ id: opUrn, type, label: name, file: rel(file) });
+        // Heuristic: every op declared in this contract file persists to
+        // every table the file references. Imprecise per-op (a contract
+        // file usually owns one entity domain — e.g. hydration.ts touches
+        // hydration_intake), so emit at confidence 0.8 to flag the
+        // imprecision. Curator's hard-path floor will filter these.
+        for (const t of tablesInFile) {
+          if (type !== 'op') continue;
+          addNode({ id: `table:${t}`, type: 'table', label: t });
+          addFact({
+            agent: 'graph',
+            subject: opUrn,
+            predicate: 'persists_to',
+            object: `table:${t}`,
+            evidence: [rel(file)],
+            confidence: 0.8,
+          });
+          edges.push({ from: opUrn, to: `table:${t}`, kind: 'persists_to', file: rel(file) });
+        }
+      }
+    }
+
+    // Migrations → register every CREATE TABLE as a table entity (real
+    // floor for the persists_to edges above). Adds tables that exist but
+    // aren't referenced by any op — useful drift signal.
+    if (config.migrationsGlob) {
+      const migrationsDir = resolve(config.targetPath, dirname(config.migrationsGlob));
+      for (const file of listFilesIn(migrationsDir, (f) => f.endsWith('.sql'))) {
+        let src: string;
+        try { src = readFileSync(file, 'utf8'); } catch { continue; }
+        for (const m of src.matchAll(/CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?:public\.)?["`]?([a-z_][\w]*)["`]?/gi)) {
+          addNode({ id: `table:${m[1]!}`, type: 'table', label: m[1]!, file: rel(file) });
+        }
       }
     }
 
@@ -235,6 +273,39 @@ export const graphAgent: Agent = {
       // useCommand('command.name', …) — string-literal command name
       for (const m of tsx.matchAll(/useCommand\s*\(\s*['"]([\w.]+)['"]/g)) {
         addEdge({ from: screenId, to: `cmd:${m[1]!}`, kind: 'dispatches', file: rel(file), line: lineAt(tsx, m.index!) });
+      }
+
+      // Component imports — `import { Foo } from '../components/Bar'` or similar.
+      // Register each imported component as a `component:<Name>` node and
+      // emit a `renders` edge. Hard-path: only emits when the import
+      // resolves to a file under <repo>/web/src/components/ or src/components/.
+      const componentsRendered = new Set<string>();
+      for (const m of tsx.matchAll(/import\s+(?:\{([^}]+)\}|(\w+))(?:\s*,\s*\{([^}]+)\})?\s+from\s+['"]([^'"]+\/components\/[^'"]+)['"]/g)) {
+        const namedGroup = m[1] || m[3] || '';
+        const defaultName = m[2] || '';
+        const importPath = m[4]!;
+        // Bail on bare module names (shouldn't trigger thanks to the
+        // /components/ regex anchor, but defensive).
+        if (!importPath.startsWith('.')) continue;
+        const names: string[] = [];
+        if (namedGroup) {
+          for (const n of namedGroup.split(',')) {
+            const cleaned = n.trim().replace(/^[\w$]+\s+as\s+/, '').replace(/^type\s+/, '').trim();
+            if (cleaned && /^[A-Z]/.test(cleaned)) names.push(cleaned);
+          }
+        }
+        if (defaultName && /^[A-Z]/.test(defaultName)) names.push(defaultName);
+        for (const name of names) {
+          // Confirm the component is actually rendered, not just type-imported.
+          // Cheap test: <ComponentName ...> appears somewhere in the JSX.
+          const renderRegex = new RegExp(`<${name}[\\s/>]`);
+          if (!renderRegex.test(tsx)) continue;
+          if (componentsRendered.has(name)) continue;
+          componentsRendered.add(name);
+          const componentUrn = `component:${name}`;
+          addNode({ id: componentUrn, type: 'component', label: name });
+          addEdge({ from: screenId, to: componentUrn, kind: 'renders', file: rel(file) });
+        }
       }
 
       const navTargets = new Set<string>();
@@ -463,9 +534,9 @@ export const graphAgent: Agent = {
     if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
     writeFileSync(GRAPH_FILE, JSON.stringify(graph, null, 2));
 
-    const counts: Record<NodeType, number> = { screen: 0, op: 0, cmd: 0, endpoint: 0, llm_provider: 0 };
+    const counts: Record<NodeType, number> = { screen: 0, op: 0, cmd: 0, endpoint: 0, llm_provider: 0, table: 0, component: 0 };
     for (const n of nodes) counts[n.type]++;
-    const edgeCounts: Record<EdgeKind, number> = { reads: 0, writes: 0, dispatches: 0, navigates_to: 0, calls: 0, invokes_llm: 0 };
+    const edgeCounts: Record<EdgeKind, number> = { reads: 0, writes: 0, dispatches: 0, navigates_to: 0, calls: 0, invokes_llm: 0, persists_to: 0, renders: 0 };
     for (const e of edges) edgeCounts[e.kind]++;
 
     const findings: Finding[] = [{
@@ -474,7 +545,7 @@ export const graphAgent: Agent = {
       kind: 'graph:built',
       at: Date.now(),
       severity: 'info',
-      summary: `topology · ${nodes.length} nodes (${counts.screen}s/${counts.op}o/${counts.cmd}c/${counts.endpoint}e/${counts.llm_provider}llm) · ${edges.length} edges (${edgeCounts.reads}r/${edgeCounts.writes}w/${edgeCounts.dispatches}d/${edgeCounts.navigates_to}n/${edgeCounts.calls}c/${edgeCounts.invokes_llm}llm)`,
+      summary: `topology · ${nodes.length} nodes (${counts.screen}s/${counts.op}o/${counts.cmd}c/${counts.endpoint}e/${counts.llm_provider}llm/${counts.table}t/${counts.component}cmp) · ${edges.length} edges`,
       payload: { nodeCount: nodes.length, edgeCount: edges.length, nodeKinds: counts, edgeKinds: edgeCounts, file: 'data/graph.json' },
     }];
 
@@ -497,12 +568,17 @@ export const graphAgent: Agent = {
       incomingByTo.set(e.to, (incomingByTo.get(e.to) ?? 0) + 1);
       outgoingByFrom.set(e.from, (outgoingByFrom.get(e.from) ?? 0) + 1);
     }
-    const ORPHAN_KIND: Record<NodeType, { kind: string; severity: Finding['severity'] }> = {
+    const ORPHAN_KIND: Record<NodeType, { kind: string; severity: Finding['severity'] } | null> = {
       cmd:          { kind: 'graph:orphan-cmd',          severity: 'warn' },
       op:           { kind: 'graph:orphan-op',           severity: 'info' },
       endpoint:     { kind: 'graph:orphan-endpoint',     severity: 'info' },
       llm_provider: { kind: 'graph:orphan-llm-provider', severity: 'info' },
       screen:       { kind: 'graph:silent-screen',       severity: 'info' },
+      // Tables / components: orphan-detection isn't a useful signal yet
+      // (a table with no op writers may just be DDL ahead of the UI).
+      // Skip them.
+      table:        null,
+      component:    null,
     };
     const PER_KIND_CAP = 12;
     const perKindCount: Partial<Record<NodeType, number>> = {};
@@ -512,6 +588,7 @@ export const graphAgent: Agent = {
         : (incomingByTo.get(n.id) ?? 0) === 0;
       if (!isOrphan) continue;
       const slot = ORPHAN_KIND[n.type];
+      if (!slot) continue;     // table / component skipped from orphan flagging
       const c = perKindCount[n.type] ?? 0;
       if (c >= PER_KIND_CAP) continue;
       perKindCount[n.type] = c + 1;
