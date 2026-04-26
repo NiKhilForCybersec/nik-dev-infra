@@ -64,8 +64,23 @@ const ConfigSchema = z.object({
     enabled: z.boolean(),
     insertClaudeMdGate: z.boolean(),
   }),
+  /** Risk-class gate (per 12-patterns #10). Everything except
+   *  write-prompt + write-user-repo runs freely. The two listed below
+   *  are off by default; an agent in either class emits a `risk:gated`
+   *  finding instead of executing until the operator flips the flag. */
+  riskGate: z.object({
+    /** Allow agents classified `write-prompt` to actually mutate
+     *  dev-infra's own .md files. Default false — self-improve emits
+     *  diffs as findings only. */
+    allowWritePrompt: z.boolean(),
+    /** Mirror of writeback.enabled for `write-user-repo` agents. Both
+     *  must be true for any user-repo write. Belt-and-suspenders. */
+    allowWriteUserRepo: z.boolean(),
+  }),
   /** Concerns markdown file, relative to targetPath. */
   concernsFile: z.string(),
+  /** Resolutions markdown file (user's Claude logs claimed fixes here). */
+  resolutionsFile: z.string(),
   /** CLAUDE.md file, relative to targetPath. */
   claudeMdFile: z.string(),
   /** Folder where the user's Claude Code session drops screenshots
@@ -99,9 +114,11 @@ const DEFAULT_CONFIG: DevInfraConfig = {
   frontendGlobs: ['web/src/**/*.{ts,tsx}', 'src/**/*.{ts,tsx}'],
   mcpServers: [],
   concernsFile: 'docs/Concerns.md',
+  resolutionsFile: 'docs/Resolutions.md',
   claudeMdFile: 'CLAUDE.md',
   screenshotsDir: 'docs/screenshots',
   writeback: { enabled: false, insertClaudeMdGate: false },
+  riskGate: { allowWritePrompt: false, allowWriteUserRepo: false },
   agentsToEnable: null,
 };
 

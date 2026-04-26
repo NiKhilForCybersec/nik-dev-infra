@@ -50,6 +50,21 @@ export type Agent = {
 
 export type SystemPhase = 'bootstrapping' | 'live';
 
+/** Risk classification for every agent (per 12-patterns #10).
+ *  - read:            pure read, no side effects anywhere
+ *  - external-call:   outbound network requests (HTTP, DNS, etc.)
+ *  - write-memory:    writes to our own data/ (memory.db, findings,
+ *                     wiki, notebooks, graph.json) — baseline for any
+ *                     agent that emits findings via emit()
+ *  - write-prompt:    can write/propose-edit dev-infra's own
+ *                     `src/server/agents/*.md` prompt files
+ *  - write-user-repo: can write to the watched repo (curator,
+ *                     consent-gated)
+ *
+ *  The orchestrator gates write-prompt + write-user-repo behind
+ *  config.riskGate flags. Everything else runs freely. */
+export type RiskClass = 'read' | 'external-call' | 'write-memory' | 'write-prompt' | 'write-user-repo';
+
 export type ServerEvent =
   | { type: 'finding'; finding: Finding }
   | { type: 'run'; run: AgentRun }

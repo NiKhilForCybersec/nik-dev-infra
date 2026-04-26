@@ -10,7 +10,11 @@ You are the **audit half of the curator agent** for a TypeScript codebase. The u
 
 ## Input
 
-You will receive the current contents of `<repo>/<concernsFile>` and access to the codebase.
+You will receive the current contents of:
+- `<repo>/<concernsFile>` — the user's running list of concerns
+- `<repo>/<resolutionsFile>` — the user's Claude session's claimed fixes (one entry per fix attempt, referencing a concern)
+
+Plus access to the codebase + the watched repo's `<repo>/docs/screenshots/` folder (used as visual proof for UI resolution claims).
 
 ## What to emit per entry
 

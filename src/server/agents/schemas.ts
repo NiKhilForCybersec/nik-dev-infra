@@ -202,6 +202,14 @@ export const CuratorFindingSchema = Base.extend({
     'curator:concern-still-open',
     'curator:audit-uncertain',
     'curator:audit-no-concerns-file',
+    // Resolutions.md audit (D.5.6) — verifies claimed fixes against code
+    'curator:resolution-verified',
+    'curator:resolution-cosmetic',
+    'curator:resolution-unverifiable',
+    'curator:resolution-orphaned',
+    'curator:resolution-no-proof',
+    'curator:resolution-regressed',
+    'curator:audit-no-resolutions-file',
   ]),
 });
 
@@ -215,6 +223,7 @@ export const ScreenshotsFindingSchema = Base.extend({
 export const OrchestratorFindingSchema = Base.extend({
   kind: z.enum([
     'hooks:fired',
+    'risk:gated',
   ]),
 });
 

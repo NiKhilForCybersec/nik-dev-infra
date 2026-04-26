@@ -10,7 +10,8 @@
  */
 
 import { minimatch } from 'minimatch';
-import { AGENTS } from './agents/index.ts';
+import { AGENTS, RISK_CLASS_BY_AGENT } from './agents/index.ts';
+import { config } from './config.ts';
 import { emit, emitRun, newId, onFinding } from './findings.ts';
 import { entities, firingHooks, lookup } from './memory.ts';
 import { startWatcher } from './watcher.ts';
@@ -32,6 +33,40 @@ async function runAgent(agent: Agent): Promise<void> {
     s.pending = true;
     return;
   }
+
+  // Risk gate (12-patterns #10). Block before incurring any cost.
+  const riskClass = RISK_CLASS_BY_AGENT[agent.name];
+  if (riskClass === 'write-prompt' && !config.riskGate.allowWritePrompt) {
+    emit({
+      id: newId(),
+      agent: 'orchestrator',
+      kind: 'risk:gated',
+      at: Date.now(),
+      severity: 'info',
+      summary: `${agent.name} blocked · riskClass=write-prompt requires riskGate.allowWritePrompt=true`,
+      payload: { agent: agent.name, riskClass },
+    } as Finding);
+    return;
+  }
+  if (riskClass === 'write-user-repo' && !(config.riskGate.allowWriteUserRepo && config.writeback.enabled)) {
+    // Curator runs but its in-agent gate produces curator:write-disabled
+    // findings; the risk gate here only fires when both flags would
+    // otherwise prevent any safe operation. We still let the agent run
+    // because its read-only audit pass is valuable, but emit a once-per-
+    // run gate notice so the policy is visible in the rail.
+    emit({
+      id: newId(),
+      agent: 'orchestrator',
+      kind: 'risk:gated',
+      at: Date.now(),
+      severity: 'info',
+      summary: `${agent.name} running in read-only mode · riskClass=write-user-repo requires riskGate.allowWriteUserRepo + writeback.enabled both true`,
+      payload: { agent: agent.name, riskClass, allowWriteUserRepo: config.riskGate.allowWriteUserRepo, writebackEnabled: config.writeback.enabled },
+    } as Finding);
+    // Do NOT return — the curator's audit + promote findings are still
+    // useful read-only signals. The agent itself enforces no-write.
+  }
+
   s.inFlight = true;
   const startedAt = Date.now();
   try {

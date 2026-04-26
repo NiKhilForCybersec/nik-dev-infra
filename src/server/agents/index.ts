@@ -2,7 +2,7 @@
  *  files in this dir + add an entry below. */
 
 import { agentEnabled } from '../config.ts';
-import type { Agent } from '../types.ts';
+import type { Agent, RiskClass } from '../types.ts';
 import { accessibilityAgent } from './accessibility.ts';
 import { aiCoverageAgent } from './ai-coverage.ts';
 import { bindingsAgent } from './bindings.ts';
@@ -59,3 +59,50 @@ export const ALL_AGENTS: Agent[] = [
 /** Agents the daemon actually runs. Filtered by config.agentsToEnable —
  *  if null, all are enabled. Imports `AGENTS` get the filtered set. */
 export const AGENTS: Agent[] = ALL_AGENTS.filter((a) => agentEnabled(a.name));
+
+/** Per-agent risk class (per 12-patterns #10). Source of truth for the
+ *  orchestrator's risk gate. Adding a new agent without an entry here
+ *  causes a fail-fast at boot — see assertion below. */
+export const RISK_CLASS_BY_AGENT: Record<string, RiskClass> = {
+  // pure read — no side effects, no findings emitted
+  // (none currently — every agent emits findings = write-memory)
+
+  // external-call — outbound HTTP / probes
+  health:        'external-call',
+  'llm-cost':    'external-call',
+  mcp:           'external-call',
+  prober:        'external-call',
+
+  // write-memory — emits findings + may write to our data/
+  registry:        'write-memory',
+  graph:           'write-memory',
+  secrets:         'write-memory',
+  'memory-keeper': 'write-memory',
+  screenshots:     'write-memory',     // pruning gated separately at agent level
+  'self-awareness':'write-memory',
+  'self-monitor':  'write-memory',
+  drift:           'write-memory',
+  navigation:      'write-memory',
+  hardcoded:       'write-memory',
+  database:        'write-memory',
+  concerns:        'write-memory',
+  sync:            'write-memory',
+  accessibility:   'write-memory',
+  bindings:        'write-memory',
+  'ai-coverage':   'write-memory',
+  bootstrap:       'write-memory',
+  'doc-ingest':    'write-memory',
+
+  // write-prompt — can edit dev-infra's own .md files (gated)
+  'self-improve':  'write-prompt',
+
+  // write-user-repo — can edit Concerns.md / CLAUDE.md (gated)
+  curator:         'write-user-repo',
+};
+
+// Boot-time fail-fast: every shipped agent must have a riskClass.
+for (const a of ALL_AGENTS) {
+  if (!RISK_CLASS_BY_AGENT[a.name]) {
+    throw new Error(`[risk] agent "${a.name}" has no riskClass entry in RISK_CLASS_BY_AGENT — add one before booting`);
+  }
+}
