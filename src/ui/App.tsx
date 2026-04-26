@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AgentMetrics } from './AgentMetrics';
+import { BootstrapProgress } from './BootstrapProgress';
 import { EntitiesPanel } from './EntitiesPanel';
 import { GraphPanel } from './GraphPanel';
 import { GraphPlayground } from './GraphPlayground';
@@ -31,11 +32,18 @@ type AgentRun = {
 type AgentInfo = { name: string; description: string };
 type Target = { path: string; label: string };
 type SystemPhase = 'bootstrapping' | 'live';
+type Completeness = {
+  overall_pct: number;
+  screens: { total: number; withEdges: number };
+  entities: { total: number; withEvidence: number };
+  segments: { total: number; withWiki: number };
+  at: number;
+} | null;
 
 type ServerEvent =
   | { type: 'finding'; finding: Finding }
   | { type: 'run'; run: AgentRun }
-  | { type: 'snapshot'; findings: Finding[]; runs: AgentRun[]; agents: AgentInfo[]; target: Target; phase: SystemPhase };
+  | { type: 'snapshot'; findings: Finding[]; runs: AgentRun[]; agents: AgentInfo[]; target: Target; phase: SystemPhase; completeness: Completeness };
 
 const SEV_COLOR: Record<Severity, string> = {
   info:  'var(--info)',
@@ -49,6 +57,7 @@ export function App() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [target, setTarget] = useState<Target | null>(null);
   const [phase, setPhase] = useState<SystemPhase>('bootstrapping');
+  const [completeness, setCompleteness] = useState<Completeness>(null);
   const [connected, setConnected] = useState(false);
   const [filterAgent, setFilterAgent] = useState<string>('all');
   const [filterSev, setFilterSev] = useState<'all' | Severity>('all');
@@ -74,7 +83,22 @@ export function App() {
             setAgents(msg.agents);
             setTarget(msg.target);
             setPhase(msg.phase);
+            setCompleteness(msg.completeness);
           } else if (msg.type === 'finding') {
+            // Live-update completeness from incoming memory:completeness
+            // findings so the progress card reflects current % without
+            // waiting for the next snapshot reconnect. Also flip phase
+            // immediately when memory-keeper announces live-ready.
+            if (msg.finding.agent === 'memory-keeper') {
+              if (msg.finding.kind === 'memory:completeness' && msg.finding.payload) {
+                const p = msg.finding.payload as { overall_pct?: number; screens?: { total: number; withEdges: number }; entities?: { total: number; withEvidence: number }; segments?: { total: number; withWiki: number } };
+                if (typeof p.overall_pct === 'number' && p.screens && p.entities && p.segments) {
+                  setCompleteness({ overall_pct: p.overall_pct, screens: p.screens, entities: p.entities, segments: p.segments, at: msg.finding.at });
+                }
+              } else if (msg.finding.kind === 'phase:live-ready') {
+                setPhase('live');
+              }
+            }
             setFindings((prev) => [...prev, msg.finding].slice(-1000));
             setLastLiveAt(Date.now());
             setLiveCount((n) => n + 1);
@@ -186,6 +210,12 @@ export function App() {
           </div>
         </div>
       </div>
+
+      {phase === 'bootstrapping' && (
+        <div style={{ padding: '0 22px', marginTop: 12 }}>
+          <BootstrapProgress data={completeness} />
+        </div>
+      )}
 
       <div style={{ flex: 1, display: 'grid', gridTemplateColumns: filterAgent === 'all' ? '280px 1fr' : '280px 1fr 340px', gap: 0, minHeight: 0 }}>
         {/* Left: agent rail + recent runs */}

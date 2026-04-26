@@ -23,6 +23,28 @@ const app = Fastify({ logger: { level: 'info' } });
 await app.register(cors, { origin: true });
 await app.register(websocket);
 
+function latestCompleteness(): {
+  overall_pct: number;
+  screens: { total: number; withEdges: number };
+  entities: { total: number; withEvidence: number };
+  segments: { total: number; withWiki: number };
+  at: number;
+} | null {
+  const rows = query<{ payload_json: string | null; at: number }>(
+    `SELECT payload_json, at FROM findings WHERE agent = 'memory-keeper' AND kind = 'memory:completeness' ORDER BY at DESC LIMIT 1`
+  );
+  if (rows.length === 0 || !rows[0]?.payload_json) return null;
+  try {
+    const p = JSON.parse(rows[0].payload_json) as {
+      overall_pct: number;
+      screens: { total: number; withEdges: number };
+      entities: { total: number; withEvidence: number };
+      segments: { total: number; withWiki: number };
+    };
+    return { ...p, at: rows[0].at };
+  } catch { return null; }
+}
+
 // REST: snapshot — initial state for the UI.
 app.get('/api/snapshot', async () => {
   const snap = snapshot();
@@ -31,6 +53,7 @@ app.get('/api/snapshot', async () => {
     agents: AGENTS.map((a) => ({ name: a.name, description: a.description })),
     target: { path: config.targetPath, label: config.targetLabel },
     phase: getPhase(),
+    completeness: latestCompleteness(),
   };
 });
 
@@ -214,6 +237,7 @@ app.register(async (instance) => {
       agents: AGENTS.map((a) => ({ name: a.name, description: a.description })),
       target: { path: config.targetPath, label: config.targetLabel },
       phase: getPhase(),
+      completeness: latestCompleteness(),
     } as ServerEvent);
     const off1 = onFinding((finding) => {
       app.log.info(`[ws] finding → ${wsClients} client(s) · ${finding.agent}/${finding.kind}`);

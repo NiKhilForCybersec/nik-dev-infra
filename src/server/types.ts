@@ -50,6 +50,14 @@ export type Agent = {
 
 export type SystemPhase = 'bootstrapping' | 'live';
 
+export type Completeness = {
+  overall_pct: number;
+  screens: { total: number; withEdges: number };
+  entities: { total: number; withEvidence: number };
+  segments: { total: number; withWiki: number };
+  at: number;
+} | null;
+
 /** Risk classification for every agent (per 12-patterns #10).
  *  - read:            pure read, no side effects anywhere
  *  - external-call:   outbound network requests (HTTP, DNS, etc.)
@@ -75,4 +83,5 @@ export type ServerEvent =
       agents: { name: string; description: string }[];
       target: { path: string; label: string };
       phase: SystemPhase;
+      completeness: Completeness;
     };
