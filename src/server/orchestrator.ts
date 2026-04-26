@@ -69,27 +69,74 @@ async function runAgent(agent: Agent): Promise<void> {
 
   s.inFlight = true;
   const startedAt = Date.now();
+
+  // 12-patterns #12 — lifecycle hooks: pre_run / post_run / error /
+  // timeout. Each fires into the L6 hook bus on segment `agent/<name>`
+  // AND emits a top-level `lifecycle:*` finding for dashboard visibility.
+  const segment = `agent/${agent.name}`;
+  emit({
+    id: newId(), agent: 'orchestrator', kind: 'lifecycle:pre',
+    at: startedAt, severity: 'info',
+    summary: `${agent.name} pre_run · riskClass=${riskClass}`,
+    payload: { agent: agent.name, riskClass, segment, event: 'pre_run' },
+  } as Finding);
+  fireEvent(segment, 'pre_run', { agent: agent.name, riskClass });
+
+  // Hard wall-clock timeout — most LLM agents have a 90-180s timeout
+  // inside runClaude; this fallback catches deterministic agents that
+  // hang on a slow file read or external probe.
+  const HARD_TIMEOUT_MS = 5 * 60 * 1000;
+  let timedOut = false;
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      reject(new Error(`agent timed out after ${HARD_TIMEOUT_MS}ms`));
+    }, HARD_TIMEOUT_MS);
+  });
+
   try {
-    const findings = await agent.run();
+    const findings = await Promise.race([agent.run(), timeoutPromise]);
+    if (timeoutHandle) clearTimeout(timeoutHandle);
     for (const f of findings) emit(f);
+    const durationMs = Date.now() - startedAt;
     emitRun({
-      agent: agent.name,
-      startedAt,
-      durationMs: Date.now() - startedAt,
-      ok: true,
+      agent: agent.name, startedAt, durationMs, ok: true,
       findingCount: findings.length,
     });
     s.lastRunAt = Date.now();
+    emit({
+      id: newId(), agent: 'orchestrator', kind: 'lifecycle:post',
+      at: Date.now(), severity: 'info',
+      summary: `${agent.name} post_run · ${findings.length} finding${findings.length === 1 ? '' : 's'} · ${durationMs}ms`,
+      payload: { agent: agent.name, durationMs, findingCount: findings.length, segment, event: 'post_run' },
+    } as Finding);
+    fireEvent(segment, 'post_run', { agent: agent.name, durationMs, findingCount: findings.length });
   } catch (e) {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    const durationMs = Date.now() - startedAt;
     emitRun({
-      agent: agent.name,
-      startedAt,
-      durationMs: Date.now() - startedAt,
-      ok: false,
-      findingCount: 0,
-      error: (e as Error).message,
+      agent: agent.name, startedAt, durationMs, ok: false,
+      findingCount: 0, error: (e as Error).message,
     });
     console.error(`[orchestrator] agent ${agent.name} failed:`, (e as Error).message);
+    if (timedOut) {
+      emit({
+        id: newId(), agent: 'orchestrator', kind: 'lifecycle:timeout',
+        at: Date.now(), severity: 'error',
+        summary: `${agent.name} timed out after ${HARD_TIMEOUT_MS / 1000}s`,
+        payload: { agent: agent.name, timeoutMs: HARD_TIMEOUT_MS, durationMs, segment, event: 'timeout' },
+      } as Finding);
+      fireEvent(segment, 'timeout', { agent: agent.name, timeoutMs: HARD_TIMEOUT_MS });
+    } else {
+      emit({
+        id: newId(), agent: 'orchestrator', kind: 'lifecycle:error',
+        at: Date.now(), severity: 'error',
+        summary: `${agent.name} error · ${(e as Error).message}`,
+        payload: { agent: agent.name, error: (e as Error).message, durationMs, segment, event: 'error' },
+      } as Finding);
+      fireEvent(segment, 'error', { agent: agent.name, error: (e as Error).message });
+    }
   } finally {
     s.inFlight = false;
     if (s.pending) {
@@ -187,11 +234,11 @@ export function startOrchestrator(): void {
   });
 
   // 4. Hook firing on finding emit. We avoid recursion by ignoring
-  // findings emitted by the orchestrator itself (kind: 'hooks:fired')
-  // and by skipping if the segment can't be derived AND no '*' hooks
-  // exist (avoids constant log noise).
+  // findings emitted by the orchestrator itself (kind: 'hooks:fired',
+  // 'risk:gated', 'lifecycle:*') and by skipping if the segment can't
+  // be derived AND no '*' hooks exist (avoids constant log noise).
   onFinding((f) => {
-    if (f.agent === 'orchestrator' && f.kind === 'hooks:fired') return;
+    if (f.agent === 'orchestrator') return;
     const segment = segmentForFile(f.file) ?? '*';
     fireEvent(segment, 'finding_emitted', { findingId: f.id, kind: f.kind, severity: f.severity });
   });

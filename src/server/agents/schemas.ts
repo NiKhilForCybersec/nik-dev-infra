@@ -224,6 +224,10 @@ export const OrchestratorFindingSchema = Base.extend({
   kind: z.enum([
     'hooks:fired',
     'risk:gated',
+    'lifecycle:pre',
+    'lifecycle:post',
+    'lifecycle:error',
+    'lifecycle:timeout',
   ]),
 });
 
