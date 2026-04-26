@@ -74,6 +74,24 @@ Open the UI, then edit any file under the watched repo. Findings appear in real 
 
 Every agent prompt opens with: "Hard path, never happy path. Below 100% confidence, don't emit." Every fact has confidence 1.0 only with file evidence. The curator runs cross-verification rules before any concern hits the user's repo, and write-back is consent-gated (default off).
 
+## Screenshots (optional, for the SCREENS gallery)
+
+The dashboard's **SCREENS** gallery shows a thumbnail per screen. Thumbnails come from `<watched-repo>/docs/screenshots/<ScreenName>.png`. Three ways to populate that folder:
+
+**Option 1 — your Claude Code session in the watched repo:** ask it to take screenshots once. Cleanest, no new deps.
+
+**Option 2 — automated via Playwright** (one-time install, repeatable runs):
+```bash
+npm i -D playwright             # ~50 MB npm + 170 MB Chromium download
+npx playwright install chromium
+
+npm run screenshots:login        # one-time: opens a headed browser; log into your app, press Enter
+npm run screenshots              # captures every Screen entity to <repo>/docs/screenshots/
+```
+The script reads the screen list from the running daemon (or the screens dir on disk if daemon is down) and follows a default tile-click navigation strategy; edit `scripts/take-screenshots.mjs`'s `CUSTOM_NAV` map to override per-screen routes when needed. Auth survives across runs via `data/playwright-auth.json` (gitignored).
+
+**Option 3 — the curator's CLAUDE.md gate:** flip `writeback.insertClaudeMdGate: true` in `dev-infra.config.json`. The curator inserts an instruction block into your repo's CLAUDE.md telling that session to drop a fresh `*Screen.png` after every `*Screen.tsx` edit. (Requires `writeback.enabled: true` first; default both are off.)
+
 ## Roadmap
 
 - Setup wizard for first-run target picker

@@ -10,7 +10,9 @@
     "ui": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc --noEmit",
-    "verify:ws": "node scripts/verify-ws.mjs"
+    "verify:ws": "node scripts/verify-ws.mjs",
+    "screenshots:login": "node scripts/screenshots-login.mjs",
+    "screenshots": "node scripts/take-screenshots.mjs"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",
