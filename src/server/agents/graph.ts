@@ -170,10 +170,36 @@ export const graphAgent: Agent = {
     // ── Screens + manifests + nav targets ────────────────────────────────
     const screensDir = config.screensGlob ? resolve(config.targetPath, dirname(config.screensGlob)) : null;
     const screenFiles = screensDir ? listFilesIn(screensDir, (f) => f.endsWith('Screen.tsx')) : [];
+
+    // First pass: build a navId → screen URN map. Each screen's
+    // .manifest.ts declares `id: 'home'` etc.; that's what onNav(...) and
+    // state.screen = '...' use. Without this map the graph emits a stub
+    // `screen:home` separate from the real `screen:HomeScreen`, doubling
+    // up nodes — which is the bug seen in the dashboard.
+    const navIdToScreenUrn = new Map<string, string>();
+    for (const file of screenFiles) {
+      const manifestPath = file.replace(/\.tsx$/, '.manifest.ts');
+      if (!existsSync(manifestPath)) continue;
+      const src = readFileSync(manifestPath, 'utf8');
+      const m = src.match(/\bid\s*:\s*['"]([\w-]+)['"]/);
+      if (!m) continue;
+      const screenName = basename(file).replace(/\.tsx$/, '');
+      navIdToScreenUrn.set(m[1]!, `screen:${screenName}`);
+    }
+
+    // Pre-pass: register every screen file with its file path BEFORE any
+    // per-screen processing. Otherwise screen A nav-targeting screen B
+    // (when B hasn't been processed yet) registers a stub node for B
+    // without its file path — and the later iteration's addNode is
+    // dropped because the URN already exists in seenIds.
+    for (const file of screenFiles) {
+      const screenName = basename(file).replace(/\.tsx$/, '');
+      addNode({ id: `screen:${screenName}`, type: 'screen', label: screenName, file: rel(file) });
+    }
+
     for (const file of screenFiles) {
       const screenName = basename(file).replace(/\.tsx$/, '');
       const screenId = `screen:${screenName}`;
-      addNode({ id: screenId, type: 'screen', label: screenName, file: rel(file) });
 
       const manifestPath = file.replace(/\.tsx$/, '.manifest.ts');
       if (existsSync(manifestPath)) {
@@ -212,11 +238,34 @@ export const graphAgent: Agent = {
       }
 
       const navTargets = new Set<string>();
+      // Direct: onNav('xxx') or state.screen = 'xxx'
       for (const m of tsx.matchAll(/onNav\(\s*['"]([\w-]+)['"]\s*\)/g))      navTargets.add(m[1]!);
       for (const m of tsx.matchAll(/state\.screen\s*=\s*['"]([\w-]+)['"]/g)) navTargets.add(m[1]!);
+      // Tile catalog: an array of objects each shaped roughly
+      //   { id: 'cycle', icon: 'refresh', label: 'Cycle', ... }
+      // The catalog is dispatched dynamically via `onNav(item.id)`, so the
+      // literal-arg regex above misses the targets. We pick them up by
+      // matching object literals with both `id:` and `icon:` fields, BUT
+      // only emit the nav edge when:
+      //   (a) the file actually dispatches via onNav(item.id) /
+      //       setState({ screen: item.id }) — proving the array is used
+      //       for navigation, not for, say, symptom or tab labels, AND
+      //   (b) the extracted id resolves to a screen URN we know about.
+      // This filters out unrelated tile-shaped data (symptom buttons,
+      // rating tiers, tabs) without losing real catalogs.
+      const dispatchesItemId = /onNav\s*\(\s*item\.id|state\.screen\s*=\s*item\.id|setState\s*\(\s*\{\s*screen\s*:\s*item\.id/.test(tsx);
+      if (dispatchesItemId) {
+        for (const m of tsx.matchAll(/\{[^{}]*?\bid\s*:\s*['"]([\w-]+)['"][^{}]*?\bicon\s*:[^{}]*?\}/g)) {
+          const id = m[1]!;
+          if (navIdToScreenUrn.has(id)) navTargets.add(id);
+        }
+      }
       for (const target of navTargets) {
-        const targetId = `screen:${target}`;
-        addNode({ id: targetId, type: 'screen', label: target });
+        // Resolve the nav-id to its canonical screen URN if a manifest
+        // declared it; otherwise fall back to a stub. Either way we don't
+        // create a duplicate node when the screen file already exists.
+        const targetId = navIdToScreenUrn.get(target) ?? `screen:${target}`;
+        if (!seenIds.has(targetId)) addNode({ id: targetId, type: 'screen', label: target });
         addEdge({ from: screenId, to: targetId, kind: 'navigates_to', file: rel(file) });
       }
     }

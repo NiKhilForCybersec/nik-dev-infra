@@ -209,12 +209,23 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
       name: 'fcose',
       animate: false,
       randomize: true,
-      nodeRepulsion: 4500,
-      idealEdgeLength: 80,
-      gravity: 0.3,
-      numIter: 2500,
+      // Tuned for Nik's ~160-node graph: more repulsion + longer edges so
+      // dense hubs (items.* fans, ui.* command cluster) breathe instead
+      // of pancake-stacking. componentSpacing pushes disconnected
+      // sub-graphs (FamilyOps / Cycle / Chat) apart.
+      nodeRepulsion: 12000,
+      idealEdgeLength: 130,
+      edgeElasticity: 0.45,
+      nodeSeparation: 90,
+      gravity: 0.18,
+      gravityRangeCompound: 1.5,
+      componentSpacing: 120,
+      tile: true,
+      tilingPaddingVertical: 20,
+      tilingPaddingHorizontal: 20,
+      numIter: 3500,
     } as any).run();
-    cy.fit(undefined, 30);
+    cy.fit(undefined, 40);
   }, [elements, entities, findings]);
 
   // Keep the cytoscape instance through unmount.
