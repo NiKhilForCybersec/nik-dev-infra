@@ -81,6 +81,11 @@ export const GraphFindingSchema = Base.extend({
   kind: z.enum([
     'graph:built',
     'graph:no-source',
+    'graph:orphan-op',
+    'graph:orphan-cmd',
+    'graph:orphan-endpoint',
+    'graph:orphan-llm-provider',
+    'graph:silent-screen',
   ]),
 });
 

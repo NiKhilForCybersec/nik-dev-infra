@@ -392,7 +392,7 @@ export const graphAgent: Agent = {
     const edgeCounts: Record<EdgeKind, number> = { reads: 0, writes: 0, dispatches: 0, navigates_to: 0, calls: 0, invokes_llm: 0 };
     for (const e of edges) edgeCounts[e.kind]++;
 
-    const finding: Finding = {
+    const findings: Finding[] = [{
       id: newId(),
       agent: 'graph',
       kind: 'graph:built',
@@ -400,7 +400,59 @@ export const graphAgent: Agent = {
       severity: 'info',
       summary: `topology · ${nodes.length} nodes (${counts.screen}s/${counts.op}o/${counts.cmd}c/${counts.endpoint}e/${counts.llm_provider}llm) · ${edges.length} edges (${edgeCounts.reads}r/${edgeCounts.writes}w/${edgeCounts.dispatches}d/${edgeCounts.navigates_to}n/${edgeCounts.calls}c/${edgeCounts.invokes_llm}llm)`,
       payload: { nodeCount: nodes.length, edgeCount: edges.length, nodeKinds: counts, edgeKinds: edgeCounts, file: 'data/graph.json' },
+    }];
+
+    // ── Orphan detection — every lone warrior in the playground gets a
+    // finding so the dashboard treats them as real signal, not visual
+    // noise. Hard-path: no assumption about why they're alone, just
+    // "nothing in the codebase wires this", with severity-by-kind:
+    //   cmd       warn   — declared in contract, but no screen dispatches
+    //   op        info   — declared but no screen reads/writes (could be
+    //                      pre-built ahead of UI; could be dead)
+    //   endpoint  info   — registered but no screen calls (often a hook
+    //                      indirection — D.4 fix #4 will close this)
+    //   llm_provider info — same, hook indirection
+    //   screen    info   — silent screen (no outgoing edges); legit for
+    //                      AuthScreen-style entry points but worth
+    //                      surfacing as a check
+    const incomingByTo = new Map<string, number>();
+    const outgoingByFrom = new Map<string, number>();
+    for (const e of edges) {
+      incomingByTo.set(e.to, (incomingByTo.get(e.to) ?? 0) + 1);
+      outgoingByFrom.set(e.from, (outgoingByFrom.get(e.from) ?? 0) + 1);
+    }
+    const ORPHAN_KIND: Record<NodeType, { kind: string; severity: Finding['severity'] }> = {
+      cmd:          { kind: 'graph:orphan-cmd',          severity: 'warn' },
+      op:           { kind: 'graph:orphan-op',           severity: 'info' },
+      endpoint:     { kind: 'graph:orphan-endpoint',     severity: 'info' },
+      llm_provider: { kind: 'graph:orphan-llm-provider', severity: 'info' },
+      screen:       { kind: 'graph:silent-screen',       severity: 'info' },
     };
-    return [finding];
+    const PER_KIND_CAP = 12;
+    const perKindCount: Partial<Record<NodeType, number>> = {};
+    for (const n of nodes) {
+      const isOrphan = n.type === 'screen'
+        ? (outgoingByFrom.get(n.id) ?? 0) === 0
+        : (incomingByTo.get(n.id) ?? 0) === 0;
+      if (!isOrphan) continue;
+      const slot = ORPHAN_KIND[n.type];
+      const c = perKindCount[n.type] ?? 0;
+      if (c >= PER_KIND_CAP) continue;
+      perKindCount[n.type] = c + 1;
+      findings.push({
+        id: newId(),
+        agent: 'graph',
+        kind: slot.kind,
+        at: Date.now(),
+        severity: slot.severity,
+        summary: n.type === 'screen'
+          ? `${n.label} has no outbound edges (no reads/writes/dispatches/calls/nav)`
+          : `${n.label} (${n.type}) is declared but no screen ${n.type === 'cmd' ? 'dispatches' : n.type === 'op' ? 'reads/writes' : 'calls'} it`,
+        ...(n.file ? { file: n.file } : {}),
+        payload: { urn: n.id, type: n.type, label: n.label },
+      });
+    }
+
+    return findings;
   },
 };
