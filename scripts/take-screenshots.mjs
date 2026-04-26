@@ -67,6 +67,11 @@ const SCREEN_ALIASES = {
   TimecapsuleScreen: 'Time Capsule',
   SideprojectsScreen:'Side Projects',
   FamilyOpsScreen:   'Family Ops',
+  StatsScreen:       'Growth',
+  ChatScreen:        'Ask Nik',
+  // MaintenanceScreen tile is labeled "Home" — conflicts with bottom-nav
+  // HOME tab. Match via the tile's sub-text instead.
+  MaintenanceScreen: 'Filters · service',
 };
 
 let chromium;
@@ -156,6 +161,23 @@ const CUSTOM_NAV = {
     await page.goto(DEV_URL, { waitUntil: 'networkidle' });
     await bypassAuthIfPresent(page);
     return true;
+  },
+  // AuthScreen is the login page itself — to see it we must clear the
+  // saved auth, otherwise storageState skips us straight past it. This
+  // intentionally does NOT call bypassAuthIfPresent, so the screenshot
+  // captures the auth UI rather than the post-login HomeScreen.
+  AuthScreen: async (page) => {
+    try {
+      await page.context().clearCookies();
+      await page.goto(DEV_URL, { waitUntil: 'domcontentloaded', timeout: TIMEOUT_MS });
+      await page.evaluate(() => {
+        try { localStorage.clear(); sessionStorage.clear(); } catch { /* */ }
+      }).catch(() => {});
+      await page.goto(DEV_URL, { waitUntil: 'domcontentloaded', timeout: TIMEOUT_MS });
+      await page.waitForLoadState('networkidle', { timeout: TIMEOUT_MS }).catch(() => {});
+      await page.waitForTimeout(1500);
+      return true;
+    } catch { return false; }
   },
   // Add more as you discover the app's nav surface.
 };
