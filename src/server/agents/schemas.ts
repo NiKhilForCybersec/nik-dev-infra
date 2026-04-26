@@ -101,6 +101,23 @@ export const SyncFindingSchema = Base.extend({
   ]),
 });
 
+export const SecretsFindingSchema = Base.extend({
+  kind: z.enum([
+    'secrets:anthropic',
+    'secrets:openai',
+    'secrets:supabase-jwt',
+    'secrets:aws-access',
+    'secrets:github-pat',
+    'secrets:github-app',
+    'secrets:google-api',
+    'secrets:slack',
+    'secrets:private-key',
+    'secrets:hex-32',
+    'secrets:scan-summary',
+    'secrets:no-source',
+  ]),
+});
+
 export type RawFinding = z.infer<typeof Base>;
 
 export const SCHEMA_BY_AGENT = {
@@ -114,6 +131,7 @@ export const SCHEMA_BY_AGENT = {
   graph: GraphFindingSchema,
   'llm-cost': LlmCostFindingSchema,
   sync: SyncFindingSchema,
+  secrets: SecretsFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;

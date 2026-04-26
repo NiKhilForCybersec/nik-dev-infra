@@ -11,6 +11,7 @@ import { healthAgent } from './health.ts';
 import { llmCostAgent } from './llm-cost.ts';
 import { navigationAgent } from './navigation.ts';
 import { registryAgent } from './registry.ts';
+import { secretsAgent } from './secrets.ts';
 import { syncAgent } from './sync.ts';
 
 export const AGENTS: Agent[] = [
@@ -18,6 +19,7 @@ export const AGENTS: Agent[] = [
   healthAgent,      // deterministic — pings external services
   graphAgent,       // deterministic — builds topology JSON
   llmCostAgent,     // deterministic — tails Supabase llm_calls table
+  secretsAgent,     // deterministic — regex scan for committed secrets
   driftAgent,       // claude -p
   navigationAgent,  // claude -p
   hardcodedAgent,   // claude -p
