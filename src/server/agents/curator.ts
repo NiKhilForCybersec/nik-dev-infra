@@ -176,6 +176,24 @@ const rule_driftCrossCheck: Rule = (f) => {
     : { promote: true, reason: 'verified: no overlapping hardcoded finding in last hour' };
 };
 
+const rule_captureStable: Rule = (f) => {
+  // Promote a screen-validator finding only if the same screen had a
+  // non-ok verdict in a prior run too. One-shot blips (network pending,
+  // mid-load skeleton) shouldn't reach Concerns.md.
+  const screen = (f.payload as { screen?: string } | undefined)?.screen;
+  if (!screen) return { promote: false, reason: 'no screen in payload' };
+  const priorBad = query<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM findings
+       WHERE agent = 'screen-validator' AND kind != 'capture:ok' AND kind != 'capture:summary'
+         AND at < ? AND at >= ?
+         AND payload_json LIKE ?`,
+    [f.at, f.at - 60 * 60 * 1000, `%"screen":"${screen}"%`],
+  )[0]?.n ?? 0;
+  return priorBad >= 1
+    ? { promote: true, reason: `verified: ${screen} also failed in prior run within last hour` }
+    : { promote: false, reason: 'first-seen capture issue — waiting for confirmation' };
+};
+
 const rule_healthDownStable: Rule = (f) => {
   // Promote only if the same target was also down in the previous health
   // run (i.e. ≥ 2 consecutive down findings for that target).
@@ -213,6 +231,18 @@ const RULES: Record<string, Rule> = {
   'drift:wrong-op':           rule_driftCrossCheck,
   'nav:broken-target':        rule_navBroken,
   'health:down':              rule_healthDownStable,
+  // Screen-validator: only persistent capture problems reach Concerns.md.
+  'capture:blank':            rule_captureStable,
+  'capture:auth-wall':        rule_captureStable,
+  'capture:error-state':      rule_captureStable,
+  'capture:failed-nav':       rule_captureStable,
+  'capture:no-capture':       rule_captureStable,
+  // Info-level capture verdicts never promote.
+  'capture:ok':               rule_skip('capture-ok is the green path'),
+  'capture:summary':          rule_skip('summary is internal, not a concern'),
+  'capture:skeleton-loading': rule_skip('mid-load — not a real issue'),
+  'capture:network-pending':  rule_skip('mid-load — not a real issue'),
+  'capture:scroll-required':  rule_skip('hint to capturer, not a code concern'),
   // Schema-rejected and curator's own findings: never promote.
   'schema-rejected':            rule_skip('schema-rejected is our bug, not the user\'s'),
   'curator:promoted':           rule_skip('do not echo our own promotions'),
@@ -220,9 +250,90 @@ const RULES: Record<string, Rule> = {
   'curator:write-disabled':     rule_skip('not actionable'),
   'curator:claudemd-updated':   rule_skip('not actionable'),
   'hooks:fired':                rule_skip('orchestrator dispatch noise'),
+  'risk:gated':                 rule_skip('internal — risk gate decision'),
+  'lifecycle:pre':              rule_skip('internal — orchestrator lifecycle'),
+  'lifecycle:post':             rule_skip('internal — orchestrator lifecycle'),
+  'lifecycle:error':            rule_skip('internal — agent error, dashboard only'),
+  'lifecycle:timeout':          rule_skip('internal — agent timeout, dashboard only'),
+  'budget:exceeded':            rule_skip('internal — daily budget cap'),
+  // hex-32 secrets are high-false-positive (UUIDs, hashes, ULIDs).
+  // Keep on dashboard but don't auto-promote — needs human eyes.
+  'secrets:hex-32':             rule_skip('high false-positive rate — needs human review on dashboard'),
   // Memory-keeper / self / orchestrator findings — internal, don't promote.
+  // These describe dev-infra's own health, not user-code concerns.
   'memory:integrity-summary':   rule_skip('internal'),
   'memory:completeness':        rule_skip('internal'),
+  'memory:orphan-fact-subject': rule_skip('internal — memory layer hygiene'),
+  'memory:orphan-fact-object':  rule_skip('internal — memory layer hygiene'),
+  'memory:orphan-hook':         rule_skip('internal — memory layer hygiene'),
+  'memory:orphan-wiki':         rule_skip('internal — memory layer hygiene'),
+  'memory:low-confidence-facts':rule_skip('internal — memory layer hygiene'),
+  'memory:revisions-pruned':    rule_skip('internal — memory layer hygiene'),
+  'memory:vacuum':              rule_skip('internal — memory layer hygiene'),
+  'memory:vacuum-failed':       rule_skip('internal — memory layer hygiene'),
+  'phase:bootstrapping':        rule_skip('internal — system phase'),
+  'phase:live-ready':           rule_skip('internal — system phase'),
+  // Self-monitor: dev-infra agents about themselves. Surfaces in dashboard,
+  // not in user's Concerns.md.
+  'self:agent-slow':            rule_skip('internal — dev-infra observability'),
+  'self:agent-failing':         rule_skip('internal — dev-infra observability'),
+  'self:prompt-broken':         rule_skip('internal — dev-infra prompt quality'),
+  'self:agent-silent':          rule_skip('internal — dev-infra observability'),
+  'self:metrics-summary':       rule_skip('internal — dev-infra observability'),
+  'self:described':             rule_skip('internal — self-awareness'),
+  'self:prompt-diff-proposal':  rule_skip('internal — self-improve'),
+  'self:no-improvements-needed':rule_skip('internal — self-improve'),
+  'self:agent-prompt-missing':  rule_skip('internal — self-improve'),
+  // Doc-ingest: meta-knowledge about the docs, not a code concern.
+  'doc-ingest:summary':         rule_skip('internal — doc ingestion stats'),
+  'doc-ingest:read-failed':     rule_skip('internal — doc ingestion error'),
+  'doc-ingest:no-docs':         rule_skip('internal — no docs to read'),
+  // Snapshotter: own backup metadata, not user-relevant.
+  'snapshot:created':           rule_skip('internal — backup metadata'),
+  'snapshot:pruned':            rule_skip('internal — backup metadata'),
+  'snapshot:failed':            rule_skip('internal — backup error'),
+  // Screenshots agent (folder watcher): housekeeping, not concerns.
+  'screenshots:summary':        rule_skip('internal — capture folder stats'),
+  'screenshots:none':           rule_skip('internal — no captures yet'),
+  // Bootstrap / registry / graph summaries: digests, not concerns.
+  'bootstrap:start':            rule_skip('internal — bootstrap progress'),
+  'bootstrap:complete':         rule_skip('internal — bootstrap progress'),
+  'bootstrap:no-source':        rule_skip('internal — bootstrap state'),
+  'registry:summary':           rule_skip('internal — registry digest'),
+  'graph:built':                rule_skip('internal — graph build digest'),
+  'graph:no-source':            rule_skip('internal — no source to graph'),
+  // Health: only health:down promotes (via rule_healthDownStable above);
+  // up/degraded/summary stay on the dashboard, not in Concerns.md.
+  'health:up':                  rule_skip('green status — not a concern'),
+  'health:degraded':            rule_skip('transient — not yet a concern'),
+  'health:summary':             rule_skip('digest — not a concern'),
+  'health:no-targets':          rule_skip('config note — not a concern'),
+  // LLM cost / MCP / prober summaries: dashboard noise, not concerns.
+  'llm:daily-summary':          rule_skip('internal — cost digest'),
+  'llm:not-configured':         rule_skip('internal — config state'),
+  'mcp:summary':                rule_skip('internal — MCP digest'),
+  'prober:summary':             rule_skip('internal — prober digest'),
+  'prober:no-endpoints':        rule_skip('internal — prober config'),
+  'prober:skipped':             rule_skip('internal — prober skipped'),
+  'prober:up':                  rule_skip('green status — not a concern'),
+  // Audit-mode curator findings (D.5.5/D.5.6): visible on dashboard,
+  // not appended back to Concerns.md (would loop).
+  'curator:concern-resolved':       rule_skip('audit verdict — dashboard only'),
+  'curator:concern-unaddressed':    rule_skip('audit verdict — dashboard only'),
+  'curator:concern-easy-pathed':    rule_skip('audit verdict — dashboard only'),
+  'curator:concern-stale':          rule_skip('audit verdict — dashboard only'),
+  'curator:concern-still-open':     rule_skip('audit verdict — dashboard only'),
+  'curator:audit-uncertain':        rule_skip('audit verdict — dashboard only'),
+  'curator:audit-no-concerns-file': rule_skip('audit state — dashboard only'),
+  'curator:resolution-verified':       rule_skip('audit verdict — dashboard only'),
+  'curator:resolution-cosmetic':       rule_skip('audit verdict — dashboard only'),
+  'curator:resolution-unverifiable':   rule_skip('audit verdict — dashboard only'),
+  'curator:resolution-orphaned':       rule_skip('audit verdict — dashboard only'),
+  'curator:resolution-no-proof':       rule_skip('audit verdict — dashboard only'),
+  'curator:resolution-regressed':      rule_skip('audit verdict — dashboard only'),
+  'curator:audit-no-resolutions-file': rule_skip('audit state — dashboard only'),
+  'curator:summary':                   rule_skip('digest — dashboard only'),
+  'curator:write-failed':              rule_skip('our error — dashboard only'),
 };
 
 const DEFAULT_RULE: Rule = (f) => {
