@@ -68,6 +68,49 @@ app.get<{ Querystring: { kind?: string; segment?: string } }>('/api/register', a
   return { entities: entities({ kind: req.query.kind, segment: req.query.segment }) };
 });
 
+// REST: rich entity rollups for the per-entity drill-down panel (D.15).
+// Per entity: register fields + in/out edge counts + recent finding stats.
+// One round-trip; the UI groups client-side by `kind`.
+app.get('/api/entities-rich', async () => {
+  const all = entities();
+  const inByUrn = new Map<string, number>();
+  const outByUrn = new Map<string, number>();
+  for (const r of query<{ subject: string; n: number }>(`SELECT subject, COUNT(*) AS n FROM facts GROUP BY subject`)) {
+    outByUrn.set(r.subject, r.n);
+  }
+  for (const r of query<{ object: string; n: number }>(`SELECT object, COUNT(*) AS n FROM facts GROUP BY object`)) {
+    inByUrn.set(r.object, r.n);
+  }
+  // Findings touching this entity (file match OR summary mentions URN).
+  const findingsByFile = new Map<string, { total: number; err: number; warn: number; lastAt: number; lastKind: string; lastSev: string }>();
+  for (const r of query<{ file: string | null; severity: string; kind: string; at: number }>(
+    `SELECT file, severity, kind, at FROM findings WHERE file IS NOT NULL ORDER BY at DESC`
+  )) {
+    if (!r.file) continue;
+    const cur = findingsByFile.get(r.file) ?? { total: 0, err: 0, warn: 0, lastAt: 0, lastKind: '', lastSev: '' };
+    cur.total++;
+    if (r.severity === 'error') cur.err++;
+    else if (r.severity === 'warn') cur.warn++;
+    if (r.at > cur.lastAt) { cur.lastAt = r.at; cur.lastKind = r.kind; cur.lastSev = r.severity; }
+    findingsByFile.set(r.file, cur);
+  }
+  const enriched = all.map((e) => {
+    const f = e.file ? findingsByFile.get(e.file) : undefined;
+    return {
+      ...e,
+      inDegree: inByUrn.get(e.urn) ?? 0,
+      outDegree: outByUrn.get(e.urn) ?? 0,
+      findingTotal: f?.total ?? 0,
+      findingErr: f?.err ?? 0,
+      findingWarn: f?.warn ?? 0,
+      lastFindingAt: f?.lastAt ?? null,
+      lastFindingKind: f?.lastKind ?? null,
+      lastFindingSeverity: f?.lastSev ?? null,
+    };
+  });
+  return { entities: enriched };
+});
+
 // REST: active hooks list.
 app.get('/api/hooks', async () => {
   return { hooks: listHooks() };

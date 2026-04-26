@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AgentMetrics } from './AgentMetrics';
+import { EntitiesPanel } from './EntitiesPanel';
 import { GraphPanel } from './GraphPanel';
 import { GraphPlayground } from './GraphPlayground';
 
@@ -53,6 +54,7 @@ export function App() {
   const [liveCount, setLiveCount] = useState(0);
   const [graphOpen, setGraphOpen] = useState(false);
   const [playgroundOpen, setPlaygroundOpen] = useState(false);
+  const [entitiesOpen, setEntitiesOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -145,6 +147,11 @@ export function App() {
             className="mono"
             style={{ padding: '4px 10px', fontSize: 10, letterSpacing: 1, color: 'var(--accent)', borderColor: 'var(--accent)' }}
           >PLAYGROUND</button>
+          <button
+            onClick={() => setEntitiesOpen(true)}
+            className="mono"
+            style={{ padding: '4px 10px', fontSize: 10, letterSpacing: 1, color: 'var(--accent)', borderColor: 'var(--accent)' }}
+          >ENTITIES</button>
           <button
             onClick={() => setGraphOpen(true)}
             className="mono"
@@ -264,6 +271,7 @@ export function App() {
 
       {graphOpen && <GraphPanel onClose={() => setGraphOpen(false)} />}
       {playgroundOpen && <GraphPlayground onClose={() => setPlaygroundOpen(false)} />}
+      {entitiesOpen && <EntitiesPanel onClose={() => setEntitiesOpen(false)} />}
     </div>
   );
 }
