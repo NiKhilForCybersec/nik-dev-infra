@@ -24,7 +24,19 @@ export type ClaudeRunOptions = {
   timeoutMs?: number;
   /** Extra dirs to grant read access to (besides ~/NIK which is always added). */
   extraDirs?: string[];
+  /** Per-call tool whitelist (12-patterns #9). Defaults to a strict
+   *  read-only set: ['Read', 'Grep', 'Glob']. Agents that emit findings
+   *  via Zod-validated JSON output don't need Write/Edit access — the
+   *  deterministic runner does writes. Locking the surface this small
+   *  closes the prompt-injection → arbitrary-Write vector. Agents that
+   *  legitimately need a wider surface MUST opt in explicitly. */
+  allowedTools?: string[];
 };
+
+/** Default tool whitelist passed to every claude -p call. All current
+ *  agents are read-only against the watched repo; emits flow through
+ *  Node-side runner code, not through claude tools. */
+const DEFAULT_ALLOWED_TOOLS = ['Read', 'Grep', 'Glob'];
 
 export type ClaudeRunResult = {
   /** Final assistant text. Often a JSON string the caller parses. */
@@ -39,10 +51,12 @@ export type ClaudeRunResult = {
  *  Throws on timeout, non-zero exit, or claude binary missing. */
 export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult> {
   const startedAt = Date.now();
+  const allowed = opts.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
   const args = [
     '-p', opts.prompt,
     '--output-format', 'json',
     '--add-dir', config.targetPath,
+    '--allowed-tools', allowed.join(','),
   ];
   for (const d of opts.extraDirs ?? []) args.push('--add-dir', d);
 
