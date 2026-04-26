@@ -11,9 +11,10 @@
 
 import { minimatch } from 'minimatch';
 import { AGENTS } from './agents/index.ts';
-import { emit, emitRun } from './findings.ts';
+import { emit, emitRun, newId, onFinding } from './findings.ts';
+import { entities, firingHooks, lookup } from './memory.ts';
 import { startWatcher } from './watcher.ts';
-import type { Agent } from './types.ts';
+import type { Agent, Finding } from './types.ts';
 
 type AgentState = {
   inFlight: boolean;
@@ -89,6 +90,42 @@ export function triggerAgent(name: string): { ok: boolean; reason?: string } {
   return { ok: true };
 }
 
+/** Look up the segment that owns the given file, by walking the register
+ *  for an entity whose `file` matches. Returns null if no entity claims
+ *  it — caller should fall back to the wildcard segment '*'. */
+function segmentForFile(file: string | undefined): string | null {
+  if (!file) return null;
+  for (const e of entities()) {
+    if (e.file === file && e.segment) return e.segment;
+  }
+  return null;
+}
+
+/** Fire an event into the hooks table. Every active hook on (segment, event)
+ *  — plus wildcard '*' on either dimension — gets its target agent
+ *  scheduled. Emits a `hooks:fired` finding so dispatch is visible. */
+function fireEvent(segment: string, event: string, payload?: Record<string, unknown>): void {
+  const hooks = firingHooks(segment, event);
+  if (hooks.length === 0) return;
+  // De-dupe target agents in this dispatch — a hook firing once per event
+  // is enough (multiple subscriptions for the same agent collapse).
+  const targets = new Set<string>();
+  for (const h of hooks) targets.add(h.agent);
+  for (const target of targets) {
+    const r = triggerAgent(target);
+    if (!r.ok) continue;
+  }
+  emit({
+    id: newId(),
+    agent: 'orchestrator',
+    kind: 'hooks:fired',
+    at: Date.now(),
+    severity: 'info',
+    summary: `${hooks.length} hook${hooks.length === 1 ? '' : 's'} fired (${segment}/${event}) → ${[...targets].join(', ')}`,
+    payload: { segment, event, targets: [...targets], hookCount: hooks.length, ...(payload ?? {}) },
+  } as Finding);
+}
+
 export function startOrchestrator(): void {
   // 1. Initial run of every agent on boot (so the UI has data immediately).
   for (const a of AGENTS) void runAgent(a);
@@ -101,12 +138,27 @@ export function startOrchestrator(): void {
     }
   }
 
-  // 3. File-change-driven runs.
+  // 3. File-change-driven runs + file_changed hooks.
   startWatcher((e) => {
     for (const a of AGENTS) {
       if (a.routedFiles.length === 0) continue;
       if (matchesAny(a.routedFiles, e.rel)) scheduleAgent(a);
     }
+    // Also fire a file_changed event into the hooks bus, scoped to the
+    // segment that owns the file (or '*' if the file isn't claimed by
+    // any registered entity yet).
+    const segment = segmentForFile(e.rel) ?? '*';
+    fireEvent(segment, 'file_changed', { file: e.rel, kind: e.kind });
+  });
+
+  // 4. Hook firing on finding emit. We avoid recursion by ignoring
+  // findings emitted by the orchestrator itself (kind: 'hooks:fired')
+  // and by skipping if the segment can't be derived AND no '*' hooks
+  // exist (avoids constant log noise).
+  onFinding((f) => {
+    if (f.agent === 'orchestrator' && f.kind === 'hooks:fired') return;
+    const segment = segmentForFile(f.file) ?? '*';
+    fireEvent(segment, 'finding_emitted', { findingId: f.id, kind: f.kind, severity: f.severity });
   });
 
   console.log(`[orchestrator] started — ${AGENTS.length} agents (${AGENTS.map((a) => a.name).join(', ')})`);

@@ -120,6 +120,12 @@ export const BootstrapFindingSchema = Base.extend({
   ]),
 });
 
+export const OrchestratorFindingSchema = Base.extend({
+  kind: z.enum([
+    'hooks:fired',
+  ]),
+});
+
 export const McpFindingSchema = Base.extend({
   kind: z.enum([
     'mcp:not-configured',
@@ -181,6 +187,7 @@ export const SCHEMA_BY_AGENT = {
   'memory-keeper': MemoryKeeperFindingSchema,
   mcp: McpFindingSchema,
   bootstrap: BootstrapFindingSchema,
+  orchestrator: OrchestratorFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;

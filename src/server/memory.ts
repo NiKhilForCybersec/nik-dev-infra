@@ -430,7 +430,11 @@ const deactivateHook = db.prepare(`
   UPDATE hooks SET active = 0, at = ? WHERE segment = ? AND event = ? AND agent = ?
 `);
 const selectHooksFor = db.prepare(`
-  SELECT * FROM hooks WHERE segment = ? AND event = ? AND active = 1 ORDER BY at DESC
+  SELECT * FROM hooks
+  WHERE active = 1
+    AND (segment = ? OR segment = '*')
+    AND (event   = ? OR event   = '*')
+  ORDER BY at DESC
 `);
 const selectAllActiveHooks = db.prepare(`
   SELECT * FROM hooks WHERE active = 1 ORDER BY segment, event, agent
