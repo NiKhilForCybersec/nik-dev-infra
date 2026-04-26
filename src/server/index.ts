@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { AGENTS } from './agents/index.ts';
 import { config } from './config.ts';
 import { onFinding, onRun, snapshot } from './findings.ts';
-import { entities, factsByPredicate, listHooks, listSegments, memoryStats, query, recallAll } from './memory.ts';
+import { entities, factsByPredicate, listHooks, listSegments, memoryStats, query, recallAll, wikiHistory, wikiList, wikiRead } from './memory.ts';
 import { startOrchestrator } from './orchestrator.ts';
 import type { ServerEvent } from './types.ts';
 
@@ -71,6 +71,30 @@ app.get<{ Querystring: { kind?: string; segment?: string } }>('/api/register', a
 // REST: active hooks list.
 app.get('/api/hooks', async () => {
   return { hooks: listHooks() };
+});
+
+// REST: wiki — list all pages, optionally filtered by segment.
+app.get<{ Querystring: { segment?: string } }>('/api/wiki', async (req) => {
+  return { pages: wikiList(req.query.segment) };
+});
+
+// REST: wiki — read a single page.
+app.get<{ Querystring: { segment?: string; topic?: string; history?: string } }>('/api/wiki/page', async (req, reply) => {
+  const seg = req.query.segment;
+  const topic = req.query.topic;
+  if (!seg || !topic) {
+    reply.code(400);
+    return { error: 'segment and topic are required' };
+  }
+  const page = wikiRead(seg, topic);
+  if (!page) {
+    reply.code(404);
+    return { error: 'page not found' };
+  }
+  if (req.query.history === '1') {
+    return { page, revisions: wikiHistory(seg, topic) };
+  }
+  return { page };
 });
 
 // REST: project topology graph (built by the graph agent).

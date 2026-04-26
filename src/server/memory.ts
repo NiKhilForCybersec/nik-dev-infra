@@ -24,7 +24,7 @@
  */
 
 import Database from 'better-sqlite3';
-import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Finding } from './types.ts';
@@ -127,7 +127,37 @@ db.exec(`
     UNIQUE(segment, event, agent)
   );
   CREATE INDEX IF NOT EXISTS idx_hooks_segment_event ON hooks(segment, event);
+
+  -- L4: wiki — long-form markdown per (segment, topic), machine-written
+  -- but human-editable. The DB row is the source of truth for the daemon;
+  -- a mirror file is kept under data/wiki/ for Obsidian-vault use.
+  CREATE TABLE IF NOT EXISTS wiki_pages (
+    segment       TEXT NOT NULL,
+    topic         TEXT NOT NULL,
+    content       TEXT NOT NULL,
+    agent         TEXT NOT NULL,
+    confidence    REAL NOT NULL DEFAULT 1.0,
+    evidence_json TEXT,
+    at            INTEGER NOT NULL,
+    PRIMARY KEY (segment, topic)
+  );
+  CREATE INDEX IF NOT EXISTS idx_wiki_pages_segment ON wiki_pages(segment);
+
+  -- L4 history: every wikiUpsert writes a revision row so the meta-agent
+  -- (and humans) can diff what an agent has learned over time.
+  CREATE TABLE IF NOT EXISTS wiki_revisions (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    segment TEXT NOT NULL,
+    topic   TEXT NOT NULL,
+    content TEXT NOT NULL,
+    agent   TEXT NOT NULL,
+    at      INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_wiki_revisions_topic ON wiki_revisions(segment, topic, at DESC);
 `);
+
+const WIKI_DIR = resolve(DATA_DIR, 'wiki');
+if (!existsSync(WIKI_DIR)) mkdirSync(WIKI_DIR, { recursive: true });
 
 const insertFinding = db.prepare(`
   INSERT OR IGNORE INTO findings
@@ -431,6 +461,110 @@ export function listHooks(): Hook[] {
   return (selectAllActiveHooks.all() as Parameters<typeof rowToHook>[0][]).map(rowToHook);
 }
 
+// ─── L4: wiki ─────────────────────────────────────────────────────────────
+
+const upsertWikiPage = db.prepare(`
+  INSERT INTO wiki_pages (segment, topic, content, agent, confidence, evidence_json, at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(segment, topic) DO UPDATE SET
+    content       = excluded.content,
+    agent         = excluded.agent,
+    confidence    = excluded.confidence,
+    evidence_json = excluded.evidence_json,
+    at            = excluded.at
+`);
+const insertWikiRevision = db.prepare(`
+  INSERT INTO wiki_revisions (segment, topic, content, agent, at) VALUES (?, ?, ?, ?, ?)
+`);
+const selectWikiPage      = db.prepare('SELECT * FROM wiki_pages WHERE segment = ? AND topic = ?');
+const selectWikiBySegment = db.prepare('SELECT segment, topic, agent, confidence, at FROM wiki_pages WHERE segment = ? ORDER BY topic');
+const selectWikiAll       = db.prepare('SELECT segment, topic, agent, confidence, at FROM wiki_pages ORDER BY segment, topic');
+const selectWikiRevisions = db.prepare('SELECT id, agent, at FROM wiki_revisions WHERE segment = ? AND topic = ? ORDER BY at DESC LIMIT ?');
+
+export type WikiPage = {
+  segment: string;
+  topic: string;
+  content: string;
+  agent: string;
+  confidence: number;
+  evidence?: string[];
+  at: number;
+};
+
+export type WikiPageMeta = {
+  segment: string;
+  topic: string;
+  agent: string;
+  confidence: number;
+  at: number;
+};
+
+/** Make a topic safe to use as a filename. Keeps letters/digits/dash/dot. */
+function slug(s: string): string {
+  return s.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'page';
+}
+
+function wikiFilePath(segment: string, topic: string): string {
+  // Segments use slashes; map to nested directories. A leading slash or '..'
+  // never enters because segment names are ours and topic is slugified.
+  const parts = segment.split('/').filter(Boolean).map(slug);
+  return resolve(WIKI_DIR, ...parts, `${slug(topic)}.md`);
+}
+
+function wikiFrontmatter(page: WikiPage): string {
+  const ev = page.evidence?.length ? `\nevidence:\n${page.evidence.map((e) => `  - ${JSON.stringify(e)}`).join('\n')}` : '';
+  return `---
+segment: ${JSON.stringify(page.segment)}
+topic: ${JSON.stringify(page.topic)}
+agent: ${JSON.stringify(page.agent)}
+confidence: ${page.confidence}${ev}
+updated_at: ${new Date(page.at).toISOString()}
+---
+
+`;
+}
+
+/** Write (or update) a wiki page. The DB row is canonical; the markdown
+ *  file is a mirror for human / Obsidian use. Each call also persists a
+ *  revision row so history is recoverable.
+ *
+ *  Hard-path: confidence defaults to 1.0. If you can't justify 1.0, don't
+ *  write the page — leave it for an agent that can. */
+export function wikiUpsert(page: Omit<WikiPage, 'at'> & { at?: number }): void {
+  const at = page.at ?? Date.now();
+  const conf = page.confidence ?? 1.0;
+  const ev = page.evidence ? JSON.stringify(page.evidence) : null;
+
+  upsertWikiPage.run(page.segment, page.topic, page.content, page.agent, conf, ev, at);
+  insertWikiRevision.run(page.segment, page.topic, page.content, page.agent, at);
+
+  const file = wikiFilePath(page.segment, page.topic);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, wikiFrontmatter({ ...page, at, confidence: conf }) + page.content + '\n');
+}
+
+export function wikiRead(segment: string, topic: string): WikiPage | undefined {
+  const r = selectWikiPage.get(segment, topic) as { segment: string; topic: string; content: string; agent: string; confidence: number; evidence_json: string | null; at: number } | undefined;
+  if (!r) return undefined;
+  return {
+    segment: r.segment, topic: r.topic, content: r.content,
+    agent: r.agent, confidence: r.confidence,
+    evidence: r.evidence_json ? (JSON.parse(r.evidence_json) as string[]) : undefined,
+    at: r.at,
+  };
+}
+
+export function wikiList(segment?: string): WikiPageMeta[] {
+  const rows = (segment !== undefined
+    ? selectWikiBySegment.all(segment)
+    : selectWikiAll.all()) as Array<{ segment: string; topic: string; agent: string; confidence: number; at: number }>;
+  return rows;
+}
+
+export function wikiHistory(segment: string, topic: string, limit = 20): Array<{ id: number; agent: string; at: number }> {
+  return selectWikiRevisions.all(segment, topic, limit) as Array<{ id: number; agent: string; at: number }>;
+}
+
 // ─── stats ────────────────────────────────────────────────────────────────
 
 /** Aggregate stats — used by the /api/memory endpoint and the UI panel
@@ -438,6 +572,7 @@ export function listHooks(): Hook[] {
 export function memoryStats(): {
   findings: number; notes: number; facts: number;
   segments: number; entities: number; hooks: number;
+  wikiPages: number; wikiRevisions: number;
   sizeBytes: number;
 } {
   const f  = (db.prepare('SELECT COUNT(*) AS n FROM findings').get() as { n: number }).n;
@@ -446,12 +581,14 @@ export function memoryStats(): {
   const s  = (db.prepare('SELECT COUNT(*) AS n FROM segments').get() as { n: number }).n;
   const e  = (db.prepare('SELECT COUNT(*) AS n FROM register').get() as { n: number }).n;
   const h  = (db.prepare('SELECT COUNT(*) AS n FROM hooks WHERE active = 1').get() as { n: number }).n;
+  const wp = (db.prepare('SELECT COUNT(*) AS n FROM wiki_pages').get()     as { n: number }).n;
+  const wr = (db.prepare('SELECT COUNT(*) AS n FROM wiki_revisions').get() as { n: number }).n;
   let size = 0;
   try {
     const stat = (db.prepare("SELECT page_count * page_size AS size FROM pragma_page_count(), pragma_page_size()").get() as { size: number });
     size = stat.size;
   } catch { /* */ }
-  return { findings: f, notes: n, facts: c, segments: s, entities: e, hooks: h, sizeBytes: size };
+  return { findings: f, notes: n, facts: c, segments: s, entities: e, hooks: h, wikiPages: wp, wikiRevisions: wr, sizeBytes: size };
 }
 
 /** Escape hatch for richer queries (e.g. dashboards, the meta-agent).
