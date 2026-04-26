@@ -4,6 +4,7 @@ import { BootstrapProgress } from './BootstrapProgress';
 import { EntitiesPanel } from './EntitiesPanel';
 import { GraphPanel } from './GraphPanel';
 import { GraphPlayground } from './GraphPlayground';
+import { ScreensGallery } from './ScreensGallery';
 import { SetupWizard } from './SetupWizard';
 
 type Severity = 'info' | 'warn' | 'error';
@@ -67,6 +68,7 @@ export function App() {
   const [graphOpen, setGraphOpen] = useState(false);
   const [playgroundOpen, setPlaygroundOpen] = useState(false);
   const [entitiesOpen, setEntitiesOpen] = useState(false);
+  const [screensOpen, setScreensOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -179,6 +181,11 @@ export function App() {
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <button
+            onClick={() => setScreensOpen(true)}
+            className="mono"
+            style={{ padding: '4px 10px', fontSize: 10, letterSpacing: 1, color: 'var(--accent)', borderColor: 'var(--accent)' }}
+          >SCREENS</button>
           <button
             onClick={() => setPlaygroundOpen(true)}
             className="mono"
@@ -320,6 +327,7 @@ export function App() {
       {graphOpen && <GraphPanel onClose={() => setGraphOpen(false)} />}
       {playgroundOpen && <GraphPlayground onClose={() => setPlaygroundOpen(false)} />}
       {entitiesOpen && <EntitiesPanel onClose={() => setEntitiesOpen(false)} />}
+      {screensOpen && <ScreensGallery onClose={() => setScreensOpen(false)} />}
       {setupOpen && <SetupWizard onClose={() => setSetupOpen(false)} />}
     </div>
   );
