@@ -22,6 +22,7 @@
 import { existsSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { config } from '../config.ts';
+// import { type } imports are tree-shaken; fine.
 import { newId } from '../findings.ts';
 import { addFact, entities, registerEntity } from '../memory.ts';
 import type { Agent, Finding } from '../types.ts';
@@ -116,8 +117,12 @@ export const screenshotsAgent: Agent = {
       });
       registered++;
 
-      // Prune anything beyond KEEP_PER_SCREEN.
-      if (entries.length > KEEP_PER_SCREEN) {
+      // Prune anything beyond KEEP_PER_SCREEN. Pruning DELETES files in
+      // the user's repo, so it requires writeback consent — the agent's
+      // riskClass is `write-user-repo`. When consent is off we leave
+      // archives in place; the user's filesystem fills slowly but
+      // we never touch their files without permission.
+      if (entries.length > KEEP_PER_SCREEN && config.writeback.enabled) {
         for (const stale of entries.slice(KEEP_PER_SCREEN)) {
           try {
             unlinkSync(resolve(dir, stale.file));

@@ -18,3 +18,5 @@ data/memory.db
 data/memory.db-*
 data/notebooks/
 data/wiki/
+# self-concerns is regenerated; keep out of git
+data/self-concerns.md

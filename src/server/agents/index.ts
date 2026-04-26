@@ -78,7 +78,7 @@ export const RISK_CLASS_BY_AGENT: Record<string, RiskClass> = {
   graph:           'write-memory',
   secrets:         'write-memory',
   'memory-keeper': 'write-memory',
-  screenshots:     'write-memory',     // pruning gated separately at agent level
+  screenshots:     'write-user-repo',  // unlinkSync of PNGs in <repo>/docs/screenshots — gated by riskGate.allowWriteUserRepo
   'self-awareness':'write-memory',
   'self-monitor':  'write-memory',
   drift:           'write-memory',

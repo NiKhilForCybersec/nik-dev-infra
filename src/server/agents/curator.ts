@@ -53,6 +53,12 @@ import { CuratorFindingSchema } from './schemas.ts';
 const here = dirname(fileURLToPath(import.meta.url));
 const AUDIT_PROMPT_BASE = readFileSync(resolve(here, 'curator-audit.md'), 'utf8');
 
+// Latches so we don't spam the rail with repeating "X is absent" hints.
+// Reset to false once the file appears so the message returns if it
+// disappears again.
+let resolutionsAbsentEmitted = false;
+let concernsAbsentEmitted = false;
+
 // ─── helpers ──────────────────────────────────────────────────────────────
 
 const CLAUDE_MD_SENTINEL_BEGIN = '<!-- nik-dev-infra:concerns-gate -->';
@@ -417,15 +423,19 @@ export const curatorAgent: Agent = {
     }
     const concernsPath = resolve(config.targetPath, config.concernsFile);
     if (!existsSync(concernsPath)) {
-      out.push({
-        id: newId(),
-        agent: 'curator',
-        kind: 'curator:audit-no-concerns-file',
-        at: now,
-        severity: 'info',
-        summary: `no ${config.concernsFile} in target — nothing to audit`,
-      });
+      if (!concernsAbsentEmitted) {
+        concernsAbsentEmitted = true;
+        out.push({
+          id: newId(),
+          agent: 'curator',
+          kind: 'curator:audit-no-concerns-file',
+          at: now,
+          severity: 'info',
+          summary: `no ${config.concernsFile} in target — nothing to audit`,
+        });
+      }
     } else {
+      concernsAbsentEmitted = false;
       const concernsBody = readFileSync(concernsPath, 'utf8');
       if (concernsBody.trim().length === 0) {
         out.push({
@@ -443,8 +453,13 @@ export const curatorAgent: Agent = {
         const resolutionsPath = resolve(config.targetPath, config.resolutionsFile);
         let resolutionsBody = '';
         if (existsSync(resolutionsPath)) {
+          resolutionsAbsentEmitted = false;
           try { resolutionsBody = readFileSync(resolutionsPath, 'utf8'); } catch { /* */ }
-        } else {
+        } else if (!resolutionsAbsentEmitted) {
+          // Latched: emit once, stay quiet until the file appears + is
+          // removed again. Avoids one "no resolutions yet" finding per
+          // 15-min curator run.
+          resolutionsAbsentEmitted = true;
           out.push({
             id: newId(),
             agent: 'curator',
