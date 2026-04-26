@@ -18,6 +18,7 @@ import { llmCostAgent } from './llm-cost.ts';
 import { mcpAgent } from './mcp.ts';
 import { memoryKeeperAgent } from './memory-keeper.ts';
 import { navigationAgent } from './navigation.ts';
+import { proberAgent } from './prober.ts';
 import { registryAgent } from './registry.ts';
 import { screenshotsAgent } from './screenshots.ts';
 import { secretsAgent } from './secrets.ts';
@@ -32,6 +33,7 @@ export const ALL_AGENTS: Agent[] = [
   secretsAgent,         // deterministic — regex scan for committed secrets
   memoryKeeperAgent,    // deterministic — owner of the memory layer's integrity
   mcpAgent,             // deterministic — MCP server tool discovery
+  proberAgent,          // deterministic — runtime endpoint reachability + p95
   screenshotsAgent,     // deterministic — watches screenshots folder + prunes
   driftAgent,           // claude -p
   navigationAgent,      // claude -p

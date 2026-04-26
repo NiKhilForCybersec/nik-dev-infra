@@ -125,6 +125,16 @@ export const BootstrapFindingSchema = Base.extend({
   ]),
 });
 
+export const ProberFindingSchema = Base.extend({
+  kind: z.enum([
+    'prober:up',
+    'prober:down',
+    'prober:summary',
+    'prober:skipped',
+    'prober:no-endpoints',
+  ]),
+});
+
 export const AiCoverageFindingSchema = Base.extend({
   kind: z.enum([
     'ai-coverage:write-not-affordable',
@@ -234,6 +244,7 @@ export const SCHEMA_BY_AGENT = {
   curator: CuratorFindingSchema,
   bindings: BindingsFindingSchema,
   'ai-coverage': AiCoverageFindingSchema,
+  prober: ProberFindingSchema,
 } as const;
 
 export type AgentName = keyof typeof SCHEMA_BY_AGENT;
