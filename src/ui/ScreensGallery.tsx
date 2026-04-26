@@ -55,15 +55,18 @@ const EDGE_COLOR: Record<EdgeKind, string> = {
   renders:      '#a4c4ff',
 };
 
+type Meta = { urn: string; screenName: string; file: string; mtimeMs: number; sizeBytes: number; isBlank: boolean };
+
 export function ScreensGallery({ onClose }: { onClose: () => void }) {
   const [screens, setScreens] = useState<Entity[]>([]);
   const [graph, setGraph] = useState<Graph | null>(null);
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [meta, setMeta] = useState<Map<string, Meta>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
-  const [screenshotPresent, setScreenshotPresent] = useState<Map<string, boolean>>(new Map());
 
+  // Initial fetch: entities + graph + findings.
   useEffect(() => {
     Promise.all([
       fetch('/api/entities-rich').then((r) => r.json()).then((d: { entities: Entity[] }) => d.entities.filter((e) => e.kind === 'screen')),
@@ -74,17 +77,28 @@ export function ScreensGallery({ onClose }: { onClose: () => void }) {
       .catch((e) => setError((e as Error).message));
   }, []);
 
-  // Track which screens have screenshots so we can collapse the
-  // placeholder noise when none exist.
-  const noteScreenshot = (urn: string, present: boolean) => {
-    setScreenshotPresent((prev) => {
-      if (prev.get(urn) === present) return prev;
-      const next = new Map(prev);
-      next.set(urn, present);
-      return next;
-    });
-  };
-  const allEmpty = screens.length > 0 && [...screenshotPresent.values()].every((v) => !v) && screenshotPresent.size === screens.length;
+  // Poll screenshots-meta every 10s so freshly captured PNGs auto-show
+  // without a browser reload, and stale-cached 404s get re-fetched.
+  // First poll fires immediately so the gallery doesn't lag on open.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await fetch('/api/screenshots-meta');
+        if (!r.ok) return;
+        const d = (await r.json()) as { present: Meta[] };
+        if (cancelled) return;
+        const m = new Map<string, Meta>();
+        for (const p of d.present) m.set(p.urn, p);
+        setMeta(m);
+      } catch { /* */ }
+    };
+    void tick();
+    const id = setInterval(tick, 10_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  const allEmpty = screens.length > 0 && meta.size === 0;
 
   const sorted = useMemo(() => {
     const f = filter.trim().toLowerCase();
@@ -167,9 +181,8 @@ The Vite dev server is at http://localhost:5173/. Use computer-use to:
                 key={e.urn}
                 entity={e}
                 active={selected === e.urn}
-                allEmpty={allEmpty}
+                meta={meta.get(e.urn)}
                 onClick={() => setSelected(e.urn)}
-                onScreenshotKnown={(present) => noteScreenshot(e.urn, present)}
               />
             ))}
           </div>
@@ -183,12 +196,23 @@ The Vite dev server is at http://localhost:5173/. Use computer-use to:
               <div style={{ fontSize: 18, fontWeight: 600, marginTop: 2, fontFamily: 'JetBrains Mono, monospace' }}>{selectedEntity.label}</div>
             </div>
 
-            <img
-              src={`/api/screenshots/${encodeURIComponent(selectedEntity.urn)}?t=${Date.now()}`}
-              alt={selectedEntity.label}
-              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-              style={{ width: '100%', borderRadius: 8, border: '1px solid var(--hairline)' }}
-            />
+            {(() => {
+              const m = meta.get(selectedEntity.urn);
+              if (!m || m.isBlank) {
+                return (
+                  <div className="glass" style={{ padding: 12, color: 'var(--fg-3)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}>
+                    {m ? `blank capture (${(m.sizeBytes / 1024).toFixed(1)} KB) — run \`npm run screenshots\` to retry` : 'no screenshot yet'}
+                  </div>
+                );
+              }
+              return (
+                <img
+                  src={`/api/screenshots/${encodeURIComponent(selectedEntity.urn)}?v=${m.mtimeMs}`}
+                  alt={selectedEntity.label}
+                  style={{ width: '100%', borderRadius: 8, border: '1px solid var(--hairline)' }}
+                />
+              );
+            })()}
 
             {selectedEntity.file && (
               <div className="mono" style={{ fontSize: 10, color: 'var(--fg-2)' }}>{selectedEntity.file}</div>
@@ -267,15 +291,23 @@ The Vite dev server is at http://localhost:5173/. Use computer-use to:
   );
 }
 
-function ScreenCard({ entity, active, allEmpty, onClick, onScreenshotKnown }: {
+function ScreenCard({ entity, active, meta, onClick }: {
   entity: Entity;
   active: boolean;
-  allEmpty: boolean;
+  meta: Meta | undefined;
   onClick: () => void;
-  onScreenshotKnown: (present: boolean) => void;
 }) {
   const status = entity.findingErr > 0 ? 'err' : entity.findingWarn > 0 ? 'warn' : 'unknown';
   const statusColor = status === 'err' ? 'var(--err)' : status === 'warn' ? 'var(--warn)' : 'var(--hairline)';
+  // Three render states for the thumbnail tile:
+  //   meta missing       → no PNG on disk; show placeholder.
+  //   meta.isBlank true  → file is suspiciously small (likely white /
+  //                        degenerate); show "blank capture · re-run" hint.
+  //   meta valid         → render the img with mtime cache-bust so a fresh
+  //                        capture replaces a stale one without browser reload.
+  const present = !!meta;
+  const blank = meta?.isBlank === true;
+  const src = meta ? `/api/screenshots/${encodeURIComponent(entity.urn)}?v=${meta.mtimeMs}` : null;
   return (
     <div
       onClick={onClick}
@@ -288,27 +320,25 @@ function ScreenCard({ entity, active, allEmpty, onClick, onScreenshotKnown }: {
       }}
     >
       <div style={{ aspectRatio: '9 / 16', borderRadius: 6, overflow: 'hidden', background: 'var(--bg)', border: '1px solid var(--hairline)', position: 'relative' }}>
-        <img
-          src={`/api/screenshots/${encodeURIComponent(entity.urn)}`}
-          alt={entity.label}
-          loading="lazy"
-          onLoad={() => onScreenshotKnown(true)}
-          onError={(e) => {
-            onScreenshotKnown(false);
-            const el = e.currentTarget as HTMLImageElement;
-            el.style.display = 'none';
-            const sib = el.nextElementSibling as HTMLDivElement | null;
-            if (sib && !allEmpty) sib.style.display = 'flex';
-          }}
-          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-        />
-        <div style={{
-          display: 'none', position: 'absolute', inset: 0,
-          alignItems: 'center', justifyContent: 'center',
-          color: 'var(--fg-3)', fontSize: 9, padding: 8, textAlign: 'center',
-        }} className="mono">
-          no screenshot · ask Claude to save<br />docs/screenshots/{entity.label}.png
-        </div>
+        {present && !blank && src ? (
+          <img
+            src={src}
+            alt={entity.label}
+            loading="lazy"
+            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+          />
+        ) : (
+          <div style={{
+            position: 'absolute', inset: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: blank ? 'var(--warn)' : 'var(--fg-3)',
+            fontSize: 9, padding: 8, textAlign: 'center',
+          }} className="mono">
+            {blank
+              ? <>blank capture<br />({(meta!.sizeBytes / 1024).toFixed(1)} KB)<br />re-run screenshots</>
+              : <>no screenshot<br />docs/screenshots/{entity.label}.png</>}
+          </div>
+        )}
       </div>
       <div className="mono" style={{ fontSize: 11, color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {entity.label}
@@ -318,6 +348,7 @@ function ScreenCard({ entity, active, allEmpty, onClick, onScreenshotKnown }: {
         <span>
           {entity.findingErr > 0 && <span style={{ color: 'var(--err)' }}>{entity.findingErr}e </span>}
           {entity.findingWarn > 0 && <span style={{ color: 'var(--warn)' }}>{entity.findingWarn}w</span>}
+          {present && !blank && meta && <span style={{ color: 'var(--fg-3)' }}> {(meta.sizeBytes / 1024).toFixed(0)}k</span>}
         </span>
       </div>
     </div>

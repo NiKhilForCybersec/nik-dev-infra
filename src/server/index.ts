@@ -216,6 +216,49 @@ app.post<{ Params: { name: string } }>('/api/agents/:name/run', async (req, repl
   return { ok: true };
 });
 
+// REST: per-screen screenshot metadata (mtime, size, blank-flag) for the
+// dashboard's quality check + cache-bust logic. The gallery polls this
+// every ~10s and rebuilds img URLs with the mtime so a fresh capture
+// is picked up without hard-reloading the browser.
+//
+// Blank detection: a real screen capture at 390x844 is typically 70-200
+// KB. Files below 8 KB are almost certainly blank/degenerate and the
+// capture script either timed out before paint or hit an error state.
+// We surface `isBlank: true` so the UI can show a "re-run" hint instead
+// of a useless white image.
+app.get('/api/screenshots-meta', async () => {
+  const dir = resolve(config.targetPath, config.screenshotsDir);
+  const fs = await import('node:fs');
+  if (!fs.existsSync(dir)) return { dir, present: [] };
+  const VALID_EXT = /\.(png|jpe?g|webp)$/i;
+  const BLANK_BYTES = 8 * 1024;
+  let names: string[];
+  try { names = fs.readdirSync(dir); } catch { return { dir, present: [] }; }
+  const grouped = new Map<string, { file: string; mtimeMs: number; size: number }>();
+  for (const name of names) {
+    if (!VALID_EXT.test(name)) continue;
+    const stem = name.slice(0, name.lastIndexOf('.'));
+    const m = stem.match(/^([A-Z][A-Za-z0-9]*Screen)\b/);
+    if (!m) continue;
+    const screenName = m[1]!;
+    let stat;
+    try { stat = fs.statSync(resolve(dir, name)); } catch { continue; }
+    const cur = grouped.get(screenName);
+    if (!cur || stat.mtimeMs > cur.mtimeMs) {
+      grouped.set(screenName, { file: name, mtimeMs: stat.mtimeMs, size: stat.size });
+    }
+  }
+  const present = [...grouped.entries()].map(([screenName, m]) => ({
+    urn: `screen:${screenName}`,
+    screenName,
+    file: m.file,
+    mtimeMs: Math.round(m.mtimeMs),
+    sizeBytes: m.size,
+    isBlank: m.size < BLANK_BYTES,
+  }));
+  return { dir: config.screenshotsDir, present };
+});
+
 // REST: latest screenshot for a screen URN. URN format: 'screen:HomeScreen'
 // (we accept the bare screen name too). Looks up the most-recent matching
 // PNG in <repo>/<config.screenshotsDir>/.
