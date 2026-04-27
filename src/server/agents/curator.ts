@@ -334,6 +334,22 @@ const RULES: Record<string, Rule> = {
   'curator:audit-no-resolutions-file': rule_skip('audit state — dashboard only'),
   'curator:summary':                   rule_skip('digest — dashboard only'),
   'curator:write-failed':              rule_skip('our error — dashboard only'),
+  // Auto-fix-driver: meta-events about the continuous-dev loop. None
+  // describe a user-code concern; they describe the LOOP'S state. The
+  // gaps the loop targets are themselves Concerns.md entries — those
+  // already live there.
+  'auto-fix:loop-disabled':            rule_skip('internal — loop state'),
+  'auto-fix:dry-run-plan':             rule_skip('internal — planned dispatch'),
+  'auto-fix:no-targets':               rule_skip('internal — green-path loop state'),
+  'auto-fix:kill-switched':            rule_skip('internal — user paused the loop'),
+  'auto-fix:dispatched':               rule_skip('internal — dispatch event'),
+  'auto-fix:cycle-complete':           rule_skip('internal — cycle outcome'),
+  'auto-fix:cycle-failed':             rule_skip('internal — cycle outcome'),
+  'auto-fix:budget-exceeded':          rule_skip('internal — daily cap hit'),
+  'auto-fix:halted-failures':          rule_skip('internal — loop self-halt'),
+  'auto-fix:dirty-tree':               rule_skip('internal — defer to clean tree'),
+  'auto-fix:no-concerns-file':         rule_skip('internal — nothing to drive'),
+  'auto-fix:summary':                  rule_skip('internal — loop digest'),
 };
 
 const DEFAULT_RULE: Rule = (f) => {

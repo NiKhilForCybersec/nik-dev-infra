@@ -106,6 +106,31 @@ const ConfigSchema = z.object({
   screenshotsDir: z.string(),
   /** Subset of agents to enable (by name). Null = all enabled. */
   agentsToEnable: z.array(z.string()).nullable(),
+  /** Continuous-development autonomous loop (per project_continuous_dev_loop
+   *  memory). When `enabled`, the auto-fix-driver picks the highest-priority
+   *  unresolved concern (Concerns.md minus Resolutions.md ∪ curator-flagged
+   *  cosmetic / regressed resolutions), dispatches a `claude -p` session
+   *  in the user's repo with Read/Edit/Write tools, and records the
+   *  outcome. Default OFF + dryRun=true so the first cycles emit planned-
+   *  diff findings without writing — flip dryRun to false only after
+   *  calibrating against a few cycles. */
+  autoFixLoop: z.object({
+    enabled: z.boolean(),
+    /** When true, the driver builds + emits the plan/prompt as a finding
+     *  but does NOT actually invoke `claude -p`. Use this to calibrate
+     *  the selector + prompt before unleashing real edits. */
+    dryRun: z.boolean(),
+    /** Hard cap on dispatch cycles per 24h. Each cycle = one concern. */
+    maxCyclesPerDay: z.number().int().nonnegative(),
+    /** Stop the loop after this many consecutive failed / cosmetic /
+     *  unverifiable cycles. Re-enabling requires the user to flip
+     *  `enabled` back on. */
+    maxConsecutiveFailures: z.number().int().positive(),
+    /** Filename in the user's repo root that, when present, pauses the
+     *  loop instantly (the driver checks every cycle). Lets the user
+     *  SIGINT-equivalent the loop without restarting the daemon. */
+    killSwitchFile: z.string(),
+  }),
 });
 
 export type DevInfraConfig = z.infer<typeof ConfigSchema>;
@@ -146,6 +171,13 @@ const DEFAULT_CONFIG: DevInfraConfig = {
     },
   },
   agentsToEnable: null,
+  autoFixLoop: {
+    enabled: false,
+    dryRun: true,
+    maxCyclesPerDay: 6,
+    maxConsecutiveFailures: 3,
+    killSwitchFile: '.dev-infra-pause',
+  },
 };
 
 function loadFromFile(): Partial<DevInfraConfig> | null {

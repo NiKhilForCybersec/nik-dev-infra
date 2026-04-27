@@ -5,6 +5,7 @@ import { agentEnabled } from '../config.ts';
 import type { Agent, RiskClass } from '../types.ts';
 import { accessibilityAgent } from './accessibility.ts';
 import { aiCoverageAgent } from './ai-coverage.ts';
+import { autoFixDriverAgent } from './auto-fix-driver.ts';
 import { bindingsAgent } from './bindings.ts';
 import { bootstrapAgent } from './bootstrap.ts';
 import { concernsAgent } from './concerns.ts';
@@ -60,6 +61,7 @@ export const ALL_AGENTS: Agent[] = [
   docIngestAgent,       // claude -p — reads README + vision docs into meta/intent wiki
   selfImproveAgent,     // claude -p — proposes prompt diffs for problem agents
   curatorAgent,         // deterministic — cross-verifies + audits user concerns
+  autoFixDriverAgent,   // deterministic selector + claude -p dispatcher (opt-in continuous-dev loop)
 ];
 
 /** Agents the daemon actually runs. Filtered by config.agentsToEnable —
@@ -107,6 +109,11 @@ export const RISK_CLASS_BY_AGENT: Record<string, RiskClass> = {
 
   // write-user-repo — can edit Concerns.md / CLAUDE.md (gated)
   curator:         'write-user-repo',
+  // auto-fix-driver dispatches `claude -p` with Edit/Write tools INTO the
+  // user's repo. Highest-trust class. Gated by writeback.enabled +
+  // riskGate.allowWriteUserRepo at the orchestrator level AND
+  // autoFixLoop.enabled inside the agent itself. All three required.
+  'auto-fix-driver': 'write-user-repo',
 };
 
 // Boot-time fail-fast: every shipped agent must have a riskClass.

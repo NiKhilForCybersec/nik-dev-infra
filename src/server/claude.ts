@@ -36,6 +36,12 @@ export type ClaudeRunOptions = {
    *  "PREVIOUSLY CONCLUDED" block so the agent doesn't re-derive state on
    *  every run. Typically sourced via memory.getSummary(agentName). */
   priorSummary?: string;
+  /** Working directory for the spawned `claude` process. Defaults to the
+   *  dev-infra repo root (claude reads --add-dir to know which project to
+   *  operate against). The auto-fix driver overrides this to the user's
+   *  repo so write-tools (Edit / Write) land their edits in the right
+   *  place rather than in dev-infra's own source. */
+  cwd?: string;
 };
 
 /** Default tool whitelist passed to every claude -p call. All current
@@ -75,6 +81,7 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
       timeout: opts.timeoutMs ?? 90_000,
       reject: true,
       stripFinalNewline: true,
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
     });
     // Claude Code's --output-format json emits a single JSON object on stdout
     // with a `result` field containing the assistant's final text.

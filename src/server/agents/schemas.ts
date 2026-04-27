@@ -214,6 +214,23 @@ export const CuratorFindingSchema = Base.extend({
   ]),
 });
 
+export const AutoFixDriverFindingSchema = Base.extend({
+  kind: z.enum([
+    'auto-fix:loop-disabled',
+    'auto-fix:dry-run-plan',
+    'auto-fix:no-targets',
+    'auto-fix:kill-switched',
+    'auto-fix:dispatched',
+    'auto-fix:cycle-complete',
+    'auto-fix:cycle-failed',
+    'auto-fix:budget-exceeded',
+    'auto-fix:halted-failures',
+    'auto-fix:dirty-tree',
+    'auto-fix:no-concerns-file',
+    'auto-fix:summary',
+  ]),
+});
+
 export const ScreenProberFindingSchema = Base.extend({
   kind: z.enum([
     'screen-prober:run-complete',
@@ -334,6 +351,7 @@ export const SCHEMA_BY_AGENT = {
   screenshots: ScreenshotsFindingSchema,
   'screen-validator': ScreenValidatorFindingSchema,
   'screen-prober': ScreenProberFindingSchema,
+  'auto-fix-driver': AutoFixDriverFindingSchema,
   snapshotter: SnapshotterFindingSchema,
   curator: CuratorFindingSchema,
   bindings: BindingsFindingSchema,
