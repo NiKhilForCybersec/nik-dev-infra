@@ -253,6 +253,17 @@ export const IntentExtractorFindingSchema = Base.extend({
   ]),
 });
 
+export const TestCoverageFindingSchema = Base.extend({
+  kind: z.enum([
+    'coverage:gap-discovered',
+    'coverage:fix-without-test',
+    'coverage:closed',
+    'coverage:summary',
+    'coverage:no-test-files',
+    'coverage:no-framework',
+  ]),
+});
+
 export const ScreenProberFindingSchema = Base.extend({
   kind: z.enum([
     'screen-prober:run-complete',
@@ -375,6 +386,7 @@ export const SCHEMA_BY_AGENT = {
   'screen-prober': ScreenProberFindingSchema,
   'codebase-graph': CodebaseGraphFindingSchema,
   'intent-extractor': IntentExtractorFindingSchema,
+  'test-coverage': TestCoverageFindingSchema,
   'auto-fix-driver': AutoFixDriverFindingSchema,
   snapshotter: SnapshotterFindingSchema,
   curator: CuratorFindingSchema,

@@ -311,6 +311,15 @@ const RULES: Record<string, Rule> = {
   'intent:failed':                  rule_skip('internal — LLM call failed'),
   'intent:no-candidates':           rule_skip('internal — green-path knowledge graph'),
   'intent:summary':                 rule_skip('internal — knowledge graph digest'),
+  // Test coverage: only the user-facing gap findings reach Concerns.md;
+  // digests + housekeeping stay on the dashboard.
+  'coverage:summary':               rule_skip('internal — coverage digest'),
+  'coverage:closed':                rule_skip('internal — coverage gap resolved'),
+  'coverage:no-test-files':         rule_skip('internal — config nudge'),
+  'coverage:no-framework':          rule_skip('internal — config nudge'),
+  // coverage:gap-discovered + coverage:fix-without-test fall through to
+  // the default rule — they ARE user concerns and should reach
+  // Concerns.md when writeback is on.
   // Health: only health:down promotes (via rule_healthDownStable above);
   // up/degraded/summary stay on the dashboard, not in Concerns.md.
   'health:up':                  rule_skip('green status — not a concern'),
