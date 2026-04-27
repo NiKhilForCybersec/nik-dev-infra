@@ -130,6 +130,15 @@ const ConfigSchema = z.object({
      *  loop instantly (the driver checks every cycle). Lets the user
      *  SIGINT-equivalent the loop without restarting the daemon. */
     killSwitchFile: z.string(),
+    /** Allowed file-path globs for the concern's `fileRef`. The selector
+     *  rejects any concern whose fileRef doesn't match at least one
+     *  glob. Hard-path safety: bounds the blast radius of live cycles.
+     *  Examples:
+     *    ["docs/**", "*.md", "*.json"]   — docs + config only (safest)
+     *    ["docs/**", "web/src/styles/**"]  — add UI-cosmetic
+     *    ["**"]                              — anything; only after calibration
+     *  When empty, the scope check is skipped (allow everything). */
+    scopes: z.array(z.string()),
   }),
 });
 
@@ -174,9 +183,16 @@ const DEFAULT_CONFIG: DevInfraConfig = {
   autoFixLoop: {
     enabled: false,
     dryRun: true,
-    maxCyclesPerDay: 6,
+    // Conservative default: 1 cycle/day so a freshly-flipped loop can't
+    // cascade. Bump up after a few cycles audit cleanly.
+    maxCyclesPerDay: 1,
     maxConsecutiveFailures: 3,
     killSwitchFile: '.dev-infra-pause',
+    // Docs + config only by default. The hard-path principle says: bound
+    // the blast radius until evidence justifies expanding it. Source-code
+    // scopes ('web/src/**', etc.) get added by the user, deliberately,
+    // after several cycles in `docs/**` audit clean.
+    scopes: ['docs/**', '*.md', '*.json'],
   },
 };
 

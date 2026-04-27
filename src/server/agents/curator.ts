@@ -350,6 +350,8 @@ const RULES: Record<string, Rule> = {
   'auto-fix:dirty-tree':               rule_skip('internal — defer to clean tree'),
   'auto-fix:no-concerns-file':         rule_skip('internal — nothing to drive'),
   'auto-fix:needs-clarification':      rule_skip('internal — gap surfaced for tightening, not a new concern'),
+  'auto-fix:out-of-scope':             rule_skip('internal — concern outside autoFixLoop.scopes'),
+  'auto-fix:diff-recorded':            rule_skip('internal — git snapshot for cycle audit'),
   'auto-fix:summary':                  rule_skip('internal — loop digest'),
 };
 

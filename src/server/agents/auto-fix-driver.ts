@@ -31,6 +31,7 @@
  */
 
 import { execa } from 'execa';
+import { minimatch } from 'minimatch';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -191,6 +192,39 @@ async function workingTreeClean(): Promise<{ clean: boolean; reason?: string }> 
     // than risk clobbering files we can't roll back.
     return { clean: false, reason: `git status failed: ${(e as Error).message.slice(0, 120)}` };
   }
+}
+
+async function gitHead(): Promise<string | null> {
+  try {
+    const r = await execa('git', ['rev-parse', 'HEAD'], { cwd: config.targetPath, timeout: 5_000 });
+    return r.stdout.trim();
+  } catch { return null; }
+}
+
+async function gitDiffSummary(headBefore: string): Promise<{ filesChanged: string[]; statTail: string } | null> {
+  try {
+    const status = await execa('git', ['status', '--porcelain'], { cwd: config.targetPath, timeout: 10_000 });
+    const filesChanged = status.stdout.trim().split('\n').filter(Boolean).map((l) => l.slice(3));
+    if (filesChanged.length === 0) return { filesChanged: [], statTail: '(no changes)' };
+    const stat = await execa('git', ['diff', '--stat', headBefore], { cwd: config.targetPath, timeout: 10_000 });
+    return { filesChanged, statTail: stat.stdout.trim().slice(-1500) };
+  } catch (e) {
+    return { filesChanged: [], statTail: `(diff failed: ${(e as Error).message.slice(0, 100)})` };
+  }
+}
+
+// Hard-path safety: a concern's fileRef must match at least one allowed
+// scope glob OR the scopes list is empty (open). Concerns without a
+// fileRef would be rejected by the actionability check upstream UNLESS
+// they have an imperative + curator verdict — for those, we still need
+// to bound dispatch. Treat fileRef-less concerns as out-of-scope when
+// scopes is non-empty: there's no way to verify the dispatched session
+// would stay within bounds. The user widens scope by adding more globs.
+function isInScope(concern: Concern): boolean {
+  const scopes = config.autoFixLoop.scopes;
+  if (scopes.length === 0) return true;
+  if (!concern.fileRef) return false;
+  return scopes.some((g) => minimatch(concern.fileRef!, g));
 }
 
 function cyclesLast24h(): number {
@@ -419,17 +453,21 @@ export const autoFixDriverAgent: Agent = {
       return true;
     });
 
-    // Hard-path filter: split actionable vs needs-clarification. Vague /
-    // observational / speculative concerns get a clarification finding
-    // and are never dispatched. The user (or curator next pass) tightens
-    // the wording, and on the next cycle the concern can be dispatched.
+    // Hard-path filter: split actionable vs needs-clarification vs
+    // out-of-scope. Vague / observational / speculative concerns get a
+    // clarification finding and are never dispatched. Concerns whose
+    // fileRef falls outside autoFixLoop.scopes get an out-of-scope
+    // finding — also never dispatched, but visible so the user knows
+    // which globs to add when they want to expand the loop.
     const actionable: Concern[] = [];
     const unactionable: Array<{ concern: Concern; reason: string }> = [];
+    const outOfScope: Concern[] = [];
     for (const cn of gaps) {
       const verdict = broken.get(cn.fingerprint);
       const check = isActionable(cn, verdict);
-      if (check.actionable) actionable.push(cn);
-      else unactionable.push({ concern: cn, reason: check.reason });
+      if (!check.actionable) { unactionable.push({ concern: cn, reason: check.reason }); continue; }
+      if (!isInScope(cn)) { outOfScope.push(cn); continue; }
+      actionable.push(cn);
     }
     // Emit one needs-clarification per unactionable gap, but keep the rail
     // calm: cap at 5 per cycle and the rest go into a digest payload.
@@ -449,6 +487,24 @@ export const autoFixDriverAgent: Agent = {
         },
       });
     }
+    // Emit one out-of-scope per gap whose fileRef isn't covered by the
+    // current scope globs. Capped at 5 too — the summary carries totals.
+    for (const cn of outOfScope.slice(0, 5)) {
+      out.push({
+        id: newId(),
+        agent: 'auto-fix-driver',
+        kind: 'auto-fix:out-of-scope',
+        at: now,
+        severity: 'info',
+        summary: `out of scope · ${cn.fileRef ? `${cn.fileRef} not in [${c.scopes.join(', ')}]` : 'no fileRef + scopes non-empty'} · "${cn.text.slice(0, 70)}${cn.text.length > 70 ? '…' : ''}"`,
+        payload: {
+          fingerprint: cn.fingerprint,
+          concernText: cn.text,
+          fileRef: cn.fileRef ?? null,
+          scopes: c.scopes,
+        },
+      });
+    }
 
     if (actionable.length === 0) {
       out.push({
@@ -457,13 +513,15 @@ export const autoFixDriverAgent: Agent = {
         kind: 'auto-fix:no-targets',
         at: now,
         severity: 'info',
-        summary: `${concerns.length} concerns · ${resolved.size} resolved · ${broken.size} flagged-broken · ${gaps.length} gaps · ${unactionable.length} needs-clarification · 0 actionable`,
+        summary: `${concerns.length} concerns · ${resolved.size} resolved · ${broken.size} flagged-broken · ${gaps.length} gaps · ${unactionable.length} needs-clarification · ${outOfScope.length} out-of-scope · 0 actionable`,
         payload: {
           concernCount: concerns.length,
           resolvedCount: resolved.size,
           brokenCount: broken.size,
           gapsTotal: gaps.length,
           unactionableTotal: unactionable.length,
+          outOfScopeTotal: outOfScope.length,
+          scopes: c.scopes,
         },
       });
       return out;
@@ -524,7 +582,9 @@ export const autoFixDriverAgent: Agent = {
       return out;
     }
 
-    // Live dispatch.
+    // Live dispatch — capture HEAD before so we can diff cleanly afterward
+    // (separates this cycle's edits from any other in-flight user work).
+    const headBefore = await gitHead();
     out.push({
       id: newId(),
       agent: 'auto-fix-driver',
@@ -539,6 +599,8 @@ export const autoFixDriverAgent: Agent = {
         fileRef: target.fileRef,
         priorVerdict: verdict ?? null,
         priorAttempts: attemptsFor(target.fingerprint),
+        scopes: c.scopes,
+        headBefore,
       },
     });
 
@@ -549,6 +611,37 @@ export const autoFixDriverAgent: Agent = {
         allowedTools: ALLOWED_TOOLS,
         timeoutMs: DISPATCH_TIMEOUT_MS,
       });
+
+      // Post-dispatch diff snapshot — surfaces what the cycle actually
+      // changed in the user repo, scoped against the captured HEAD.
+      // Out-of-scope file changes are flagged so the user can spot a
+      // session that ignored its instructions.
+      let diffPayload: { filesChanged: string[]; statTail: string; outOfScopeFiles: string[] } | null = null;
+      if (headBefore) {
+        const d = await gitDiffSummary(headBefore);
+        if (d) {
+          const outOfScopeFiles = c.scopes.length === 0
+            ? []
+            : d.filesChanged.filter((f) => !c.scopes.some((g) => minimatch(f, g)));
+          diffPayload = { ...d, outOfScopeFiles };
+          out.push({
+            id: newId(),
+            agent: 'auto-fix-driver',
+            kind: 'auto-fix:diff-recorded',
+            at: Date.now(),
+            severity: outOfScopeFiles.length > 0 ? 'warn' : 'info',
+            summary: `${d.filesChanged.length} file${d.filesChanged.length === 1 ? '' : 's'} changed${outOfScopeFiles.length > 0 ? ` · ${outOfScopeFiles.length} OUT-OF-SCOPE` : ''}`,
+            payload: {
+              fingerprint: target.fingerprint,
+              filesChanged: d.filesChanged,
+              outOfScopeFiles,
+              statTail: d.statTail,
+              headBefore,
+            },
+          });
+        }
+      }
+
       out.push({
         id: newId(),
         agent: 'auto-fix-driver',
@@ -562,6 +655,7 @@ export const autoFixDriverAgent: Agent = {
           durationMs: r.durationMs,
           ...(r.usage ? { usage: r.usage } : {}),
           claudeOutputTail: r.text.slice(-1500),
+          ...(diffPayload ? { diff: diffPayload } : {}),
         },
       });
     } catch (e) {
@@ -576,6 +670,7 @@ export const autoFixDriverAgent: Agent = {
           fingerprint: target.fingerprint,
           concernText: target.text,
           error: (e as Error).message,
+          headBefore,
         },
       });
     }

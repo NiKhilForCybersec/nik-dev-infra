@@ -61,6 +61,7 @@ app.get('/api/config', async () => {
     claudeMdFile: config.claudeMdFile,
     writeback: config.writeback,
     riskGate: config.riskGate,
+    autoFixLoop: config.autoFixLoop,
     hasUserConfig,
     configFilePath: CONFIG_FILE_PATH,
   };

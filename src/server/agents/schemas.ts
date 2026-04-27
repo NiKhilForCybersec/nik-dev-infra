@@ -228,6 +228,8 @@ export const AutoFixDriverFindingSchema = Base.extend({
     'auto-fix:dirty-tree',
     'auto-fix:no-concerns-file',
     'auto-fix:needs-clarification',
+    'auto-fix:out-of-scope',
+    'auto-fix:diff-recorded',
     'auto-fix:summary',
   ]),
 });
