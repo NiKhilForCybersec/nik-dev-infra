@@ -38,6 +38,13 @@ type ServerEvent =
   | { type: 'snapshot'; findings: Finding[] };
 
 const NODE_COLOR: Record<string, string> = {
+  // Pseudo-kinds (virtual endpoints; same colour family as the real ones)
+  file:          '#7a7a8c',
+  scope:         '#a4c4ff',
+  section:       '#ffd166',
+  author:        '#5fd49a',
+  tag:           '#c389ff',
+  // Real kinds
   screen:        '#62b5ff',
   op:            '#7eb6a3',
   cmd:           '#c389ff',
@@ -63,11 +70,17 @@ const NODE_COLOR: Record<string, string> = {
 
 // MEMORY kinds — what BRAIN shows by default. The "second brain" view
 // is about what dev-infra REMEMBERS (concerns / resolutions / notes /
-// commits / wiki / file activity / its own self-model), not the code's
-// structural topology. Topology stays in the PLAYGROUND (2D Cytoscape).
+// commits / file activity / its own self-model), PLUS the pseudo-URN
+// targets they connect to (file: / scope: / section: / author: / tag: /
+// table:) so the brain has structure instead of floating dots.
+// Topology kinds (module / function / screen / op / etc.) stay in the
+// PLAYGROUND (2D Cytoscape).
 const MEMORY_KINDS = new Set([
   'concern', 'resolution', 'note', 'commit', 'file-activity',
   'self', 'agent', 'mcp_server', 'mcp_tool',
+  // Virtual / pseudo-URN endpoints — emitted by /api/memory/graph so
+  // memory entities have something to connect to.
+  'file', 'scope', 'section', 'author', 'tag', 'table',
 ]);
 
 // Which fact predicates make sense for the memory subgraph (vs. the
@@ -336,13 +349,17 @@ export function BrainView({ onClose }: { onClose: () => void }) {
     return { nodes, links };
   }, [graph, filter, hiddenKinds, concernStatus, scope]);
 
-  // Per-kind counts for the legend / filter.
+  // Per-kind counts for the legend / filter — restricted to the
+  // current scope, so MEMORY mode never shows op/module/screen chips.
   const kindCounts = useMemo(() => {
     const m = new Map<string, number>();
     if (!graph) return m;
-    for (const n of graph.nodes) m.set(n.type, (m.get(n.type) ?? 0) + 1);
+    for (const n of graph.nodes) {
+      if (scope === 'memory' && !MEMORY_KINDS.has(n.type)) continue;
+      m.set(n.type, (m.get(n.type) ?? 0) + 1);
+    }
     return m;
-  }, [graph]);
+  }, [graph, scope]);
 
   // Click → fly camera to node + open drawer.
   const onNodeClick = (node: GraphNode) => {
@@ -489,6 +506,18 @@ export function BrainView({ onClose }: { onClose: () => void }) {
       {/* Canvas + drawer */}
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <div ref={containerRef} style={{ flex: 1, position: 'relative', minHeight: 300 }}>
+          {graph && data.nodes.length === 0 && (
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', zIndex: 1 }}>
+              <div className="glass" style={{ padding: 24, maxWidth: 480, textAlign: 'center', pointerEvents: 'auto' }}>
+                <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: 1.5, marginBottom: 8 }}>EMPTY BRAIN</div>
+                <div style={{ fontSize: 13, color: 'var(--fg)', lineHeight: 1.5 }}>
+                  {scope === 'memory'
+                    ? <>No memory entities match the current filters. Try clicking <b>ALL</b> above to overlay project topology, or drop a note from the <b>MEMORY</b> tab to grow the brain.</>
+                    : <>No nodes match the current filters. Clear the search box or re-enable kind chips below.</>}
+                </div>
+              </div>
+            </div>
+          )}
           {graph && (
             <ForceGraph3D
               ref={fgRef as any}

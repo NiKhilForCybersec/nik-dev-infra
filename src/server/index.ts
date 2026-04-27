@@ -389,19 +389,43 @@ app.get('/api/memory/graph', async () => {
   const edges = query<{ subject: string; predicate: string; object: string }>(
     `SELECT subject, predicate, object FROM facts ORDER BY at DESC LIMIT 5000`,
   );
-  // Build a node-id set so we drop edges whose endpoints aren't
-  // visible (the orphan-object facts we found in the audit). The
-  // BRAIN doesn't render dangling edges.
-  const idSet = new Set(nodes.map((n) => n.urn));
+  // Build a node-id set + add VIRTUAL nodes for pseudo-URN targets
+  // (file:X, scope:X, section:X, author:X, tag:X, table:X) so memory
+  // entities — which connect to these pseudo-URNs, not real register
+  // entries — actually have endpoints to render against. Without this,
+  // a 40-concern memory view would be 40 floating dots, no edges.
+  const realIds = new Set(nodes.map((n) => n.urn));
+  const PSEUDO_KIND: Record<string, string> = {
+    file: 'file', scope: 'scope', section: 'section',
+    author: 'author', tag: 'tag', table: 'table',
+  };
+  const virtualNodes = new Map<string, { id: string; type: string; label: string }>();
+  for (const e of edges) {
+    for (const u of [e.subject, e.object]) {
+      if (realIds.has(u) || virtualNodes.has(u)) continue;
+      const m = u.match(/^([a-z][a-z0-9_-]*):/);
+      const prefix = m?.[1];
+      if (!prefix || !PSEUDO_KIND[prefix]) continue;
+      virtualNodes.set(u, {
+        id: u,
+        type: PSEUDO_KIND[prefix]!,
+        label: u.slice(prefix.length + 1),
+      });
+    }
+  }
+  const allNodeIds = new Set([...realIds, ...virtualNodes.keys()]);
   return {
-    nodes: nodes.map((n) => ({
-      id: n.urn,
-      type: n.kind,
-      label: n.label,
-      ...(n.file ? { file: n.file } : {}),
-    })),
+    nodes: [
+      ...nodes.map((n) => ({
+        id: n.urn,
+        type: n.kind,
+        label: n.label,
+        ...(n.file ? { file: n.file } : {}),
+      })),
+      ...[...virtualNodes.values()],
+    ],
     edges: edges
-      .filter((e) => idSet.has(e.subject) && idSet.has(e.object))
+      .filter((e) => allNodeIds.has(e.subject) && allNodeIds.has(e.object))
       .map((e) => ({ from: e.subject, to: e.object, kind: e.predicate })),
     builtAt: Date.now(),
   };
