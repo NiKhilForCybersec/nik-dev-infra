@@ -34,7 +34,7 @@
 
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { extname, join, relative, resolve } from 'node:path';
+import { dirname, extname, join, relative, resolve } from 'node:path';
 import { config } from '../config.ts';
 import { newId } from '../findings.ts';
 import { addFact, getCodeFile, recordCodeFileParse, registerEntity } from '../memory.ts';
@@ -46,8 +46,18 @@ const PARSEABLE_EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
 const SKIP_DIR_NAMES = new Set(['node_modules', 'dist', 'build', '.next', '.turbo', '.cache', '.vite', 'coverage', '.git']);
 
 type ExtractedExport = { kind: 'function' | 'class'; name: string; line: number };
+type ExtractedImport = {
+  /** Raw source string from the import — './foo', 'react', '@/components/X', etc. */
+  source: string;
+  /** Imported names (named imports + default + namespace alias).
+   *  Empty array for side-effect-only imports (`import './x';`). */
+  names: string[];
+  line: number;
+  dynamic: boolean;
+};
 type ParseResult = {
   exports: ExtractedExport[];
+  imports: ExtractedImport[];
   parseError?: string;
 };
 
@@ -84,6 +94,104 @@ function pickLanguage(p: { tsx: any; ts: any }, ext: string) {
 function sha256(s: string): string {
   return createHash('sha256').update(s).digest('hex');
 }
+
+// ─── import resolution ─────────────────────────────────────────────────────
+
+const RESOLVE_EXTS = ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.cjs'];
+const INDEX_NAMES = RESOLVE_EXTS.map((e) => `index${e}`);
+
+type TsConfigAliases = { baseUrl: string; paths: Record<string, string[]> };
+let tsAliasCache: TsConfigAliases | null | undefined;       // undefined = uncached, null = checked + none
+
+function loadTsAliases(): TsConfigAliases | null {
+  if (tsAliasCache !== undefined) return tsAliasCache;
+  const candidates = ['tsconfig.json', 'web/tsconfig.json', 'apps/web/tsconfig.json', 'tsconfig.base.json'];
+  for (const rel of candidates) {
+    const abs = resolve(config.targetPath, rel);
+    if (!existsSync(abs)) continue;
+    try {
+      // Strip line comments + trailing commas — TS configs allow JSONC.
+      const raw = readFileSync(abs, 'utf8')
+        .replace(/^\s*\/\/.*$/gm, '')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/,\s*([}\]])/g, '$1');
+      const j = JSON.parse(raw);
+      const compilerOpts = j.compilerOptions ?? {};
+      if (compilerOpts.paths || compilerOpts.baseUrl) {
+        const baseUrl = resolve(abs, '..', compilerOpts.baseUrl ?? '.');
+        tsAliasCache = { baseUrl, paths: compilerOpts.paths ?? {} };
+        return tsAliasCache;
+      }
+    } catch { /* malformed tsconfig — skip */ }
+  }
+  tsAliasCache = null;
+  return null;
+}
+
+/** Resolve a relative path stem to an actual file (with extension or
+ *  /index.*). Returns relative-to-targetPath, or null if nothing exists. */
+function resolveFileOnDisk(absStem: string): string | null {
+  for (const ext of RESOLVE_EXTS) {
+    const p = absStem + ext;
+    if (existsSync(p)) return p;
+  }
+  for (const idx of INDEX_NAMES) {
+    const p = join(absStem, idx);
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+type ResolvedImport =
+  | { kind: 'module'; relPath: string }
+  | { kind: 'package'; name: string }
+  | { kind: 'unresolved'; raw: string };
+
+function resolveImport(importerAbs: string, source: string): ResolvedImport {
+  // Strip type-only marker.
+  const src = source.startsWith('type:') ? source.slice(5).trim() : source;
+
+  // Relative
+  if (src.startsWith('./') || src.startsWith('../')) {
+    const stem = resolve(dirname(importerAbs), src);
+    const file = resolveFileOnDisk(stem);
+    if (file) {
+      return { kind: 'module', relPath: relative(config.targetPath, file) };
+    }
+    return { kind: 'unresolved', raw: src };
+  }
+
+  // Aliased — try tsconfig paths
+  const aliases = loadTsAliases();
+  if (aliases) {
+    for (const [pattern, targets] of Object.entries(aliases.paths)) {
+      const re = new RegExp('^' + pattern.replace('*', '(.+)') + '$');
+      const m = re.exec(src);
+      if (!m) continue;
+      for (const target of targets) {
+        const tail = m[1] ?? '';
+        const stem = resolve(aliases.baseUrl, target.replace('*', tail));
+        const file = resolveFileOnDisk(stem);
+        if (file) {
+          return { kind: 'module', relPath: relative(config.targetPath, file) };
+        }
+      }
+      return { kind: 'unresolved', raw: src };
+    }
+  }
+
+  // External package — strip subpath, keep scope.
+  if (src.startsWith('@')) {
+    const parts = src.split('/');
+    return { kind: 'package', name: parts.slice(0, 2).join('/') };
+  }
+  if (src.startsWith('node:') || src.startsWith('.')) {
+    return { kind: 'unresolved', raw: src };
+  }
+  const top = src.split('/')[0]!;
+  return { kind: 'package', name: top };
+}
+
 
 // Walk the configured globs (kept simple — recursive directory walk with
 // a skip-set instead of full glob expansion, since chokidar already covers
@@ -165,13 +273,77 @@ function extractExports(node: any): ExtractedExport[] {
   return out;
 }
 
+function extractImports(node: any): ExtractedImport[] {
+  const out: ExtractedImport[] = [];
+  // Top-level `import_statement` covers static imports.
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const child = node.namedChild(i);
+    if (!child) continue;
+    if (child.type === 'import_statement') {
+      const stringNode = child.children.find((c: any) => c.type === 'string');
+      const fragment = stringNode?.namedChild(0);
+      const source = fragment?.text ?? null;
+      if (!source) continue;
+      const names: string[] = [];
+      const clause = child.children.find((c: any) => c.type === 'import_clause');
+      if (clause) {
+        for (let j = 0; j < clause.namedChildCount; j++) {
+          const part = clause.namedChild(j);
+          if (!part) continue;
+          if (part.type === 'identifier') {
+            // default import: `import Foo from 'x'`
+            names.push(part.text);
+          } else if (part.type === 'namespace_import') {
+            // `import * as Foo from 'x'` — record the alias name
+            const id = part.namedChild(0);
+            if (id?.text) names.push(`*as:${id.text}`);
+          } else if (part.type === 'named_imports') {
+            for (let k = 0; k < part.namedChildCount; k++) {
+              const spec = part.namedChild(k);
+              if (spec?.type === 'import_specifier') {
+                const id = spec.namedChild(0);
+                if (id?.text) names.push(id.text);
+              }
+            }
+          }
+        }
+      }
+      out.push({ source, names, line: child.startPosition.row + 1, dynamic: false });
+    }
+  }
+  // Dynamic imports — `import('./x')` — recursive walk since they nest
+  // anywhere (await, expressions, callbacks). Only top-3 levels deep to
+  // bound cost.
+  function findDynamic(n: any, depth: number) {
+    if (depth > 4) return;
+    if (n.type === 'call_expression') {
+      const callee = n.children[0];
+      if (callee?.type === 'import') {
+        const argList = n.children.find((c: any) => c.type === 'arguments');
+        const firstArg = argList?.namedChild(0);
+        if (firstArg?.type === 'string') {
+          const fragment = firstArg.namedChild(0);
+          const source = fragment?.text ?? null;
+          if (source) out.push({ source, names: [], line: n.startPosition.row + 1, dynamic: true });
+        }
+      }
+    }
+    for (let i = 0; i < n.namedChildCount; i++) findDynamic(n.namedChild(i), depth + 1);
+  }
+  findDynamic(node, 0);
+  return out;
+}
+
 function parseFile(p: { parser: Parser; tsx: any; ts: any }, absPath: string, source: string): ParseResult {
   try {
     p.parser.setLanguage(pickLanguage(p, extname(absPath)));
     const tree = p.parser.parse(source);
-    return { exports: extractExports(tree.rootNode) };
+    return {
+      exports: extractExports(tree.rootNode),
+      imports: extractImports(tree.rootNode),
+    };
   } catch (e) {
-    return { exports: [], parseError: (e as Error).message.slice(0, 200) };
+    return { exports: [], imports: [], parseError: (e as Error).message.slice(0, 200) };
   }
 }
 
@@ -211,12 +383,21 @@ export const codebaseGraphAgent: Agent = {
       }];
     }
 
+    // Reset alias cache once per cycle so tsconfig edits (rare) get picked
+    // up without a daemon restart.
+    tsAliasCache = undefined;
+
     const files = walkRepo(dirs);
     let parsed = 0;
     let cached = 0;
     let errors = 0;
     let exportsTotal = 0;
+    let importsResolved = 0;
+    let importsExternal = 0;
+    let importsUnresolved = 0;
+    let packagesRegistered = 0;
     let modulesRegistered = 0;
+    const seenPackages = new Set<string>();
     const start = Date.now();
 
     for (const abs of files) {
@@ -267,6 +448,52 @@ export const codebaseGraphAgent: Agent = {
         exportsTotal++;
       }
 
+      // Imports → register external packages once + emit (module imports
+      // module-or-package) facts. Unresolved imports get a finding-style
+      // counter only — no fact, since the target URN doesn't exist.
+      for (const imp of r.imports) {
+        const resolved = resolveImport(abs, imp.source);
+        if (resolved.kind === 'module') {
+          const targetUrn = `module:${resolved.relPath}`;
+          // Don't register the target module here — it gets registered when
+          // its OWN parse runs (we're walking every file). Just emit the
+          // edge; the target may briefly be missing on first-cycle when
+          // the importer parses before the target. The graph repairs on
+          // subsequent cycles.
+          addFact({
+            agent: 'codebase-graph',
+            subject: moduleUrn,
+            predicate: imp.dynamic ? 'imports_dynamic' : 'imports',
+            object: targetUrn,
+            evidence: [`${rel}:${imp.line}`],
+          });
+          importsResolved++;
+        } else if (resolved.kind === 'package') {
+          const pkgUrn = `package:${resolved.name}`;
+          if (!seenPackages.has(pkgUrn)) {
+            seenPackages.add(pkgUrn);
+            registerEntity({
+              urn: pkgUrn,
+              kind: 'package',
+              label: resolved.name,
+              agent: 'codebase-graph',
+              evidence: [`${rel}:${imp.line}`],
+            });
+            packagesRegistered++;
+          }
+          addFact({
+            agent: 'codebase-graph',
+            subject: moduleUrn,
+            predicate: 'depends_on',
+            object: pkgUrn,
+            evidence: [`${rel}:${imp.line}`],
+          });
+          importsExternal++;
+        } else {
+          importsUnresolved++;
+        }
+      }
+
       // Only record the cache entry when the parse SUCCEEDED — otherwise
       // a failure caches as "done" and the next cycle skips it forever.
       if (!r.parseError) recordCodeFileParse(rel, hash);
@@ -279,7 +506,7 @@ export const codebaseGraphAgent: Agent = {
       kind: 'codebase-graph:summary',
       at: Date.now(),
       severity: errors > parsed * 0.5 ? 'warn' : 'info',
-      summary: `${files.length} files · ${parsed} parsed · ${cached} cache-hit · ${errors} parse-error · ${exportsTotal} exports · ${modulesRegistered} modules · ${Math.round((Date.now() - start) / 1000)}s`,
+      summary: `${files.length} files · ${parsed} parsed · ${cached} cache-hit · ${errors} parse-error · ${exportsTotal} exports · ${modulesRegistered} modules · ${importsResolved}+${importsExternal} imports (${importsUnresolved} unresolved) · ${packagesRegistered} pkgs · ${Math.round((Date.now() - start) / 1000)}s`,
       payload: {
         files: files.length,
         parsed,
@@ -287,6 +514,10 @@ export const codebaseGraphAgent: Agent = {
         errors,
         exportsTotal,
         modulesRegistered,
+        importsResolved,
+        importsExternal,
+        importsUnresolved,
+        packagesRegistered,
         durationMs: Date.now() - start,
         dirs,
       },
