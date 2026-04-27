@@ -144,6 +144,8 @@ export const SelfMonitorFindingSchema = Base.extend({
 export const SelfImproveFindingSchema = Base.extend({
   kind: z.enum([
     'self:prompt-diff-proposal',
+    'self:prompt-diff-applied',
+    'self:prompt-diff-rejected',
     'self:no-improvements-needed',
     'self:agent-prompt-missing',
   ]),

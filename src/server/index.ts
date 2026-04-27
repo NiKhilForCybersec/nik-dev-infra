@@ -252,9 +252,16 @@ app.post<{ Params: { id: string }; Body: { decision: 'approved' | 'rejected'; no
       return { error: `approval already ${row.status}` };
     }
 
-    // On reject, revert the file changes the dispatched session made.
     let revertErrors: string[] = [];
-    if (decision === 'rejected') {
+    let applyErrors: string[] = [];
+
+    // Branch on the approval kind — auto-fix and self-improve have
+    // different "approve / reject" semantics.
+    const isAutoFix = row.kind === 'auto-fix:cycle-complete';
+    const isPromptDiff = row.kind === 'self:prompt-diff-proposal';
+
+    if (decision === 'rejected' && isAutoFix) {
+      // Revert the file changes the dispatched session made.
       try {
         const payload = JSON.parse(row.payload_json) as { diff?: { filesChanged?: string[] }; headBefore?: string };
         const files = payload.diff?.filesChanged ?? [];
@@ -264,10 +271,8 @@ app.post<{ Params: { id: string }; Body: { decision: 'approved' | 'rejected'; no
           for (const file of files) {
             try {
               if (headBefore) {
-                // Restore tracked-file content from the snapshot.
                 await execa('git', ['checkout', headBefore, '--', file], { cwd: config.targetPath, timeout: 10_000 });
               } else {
-                // Untracked or no snapshot — try a working-tree revert.
                 await execa('git', ['checkout', '--', file], { cwd: config.targetPath, timeout: 10_000 });
               }
             } catch (e) {
@@ -280,18 +285,67 @@ app.post<{ Params: { id: string }; Body: { decision: 'approved' | 'rejected'; no
       }
     }
 
+    if (decision === 'approved' && isPromptDiff) {
+      // Defense-in-depth: even with explicit user approval, the
+      // riskGate.allowWritePrompt flag still gates actually editing
+      // dev-infra's own prompt files. Without it, decline + tell the user.
+      if (!config.riskGate.allowWritePrompt) {
+        reply.code(403);
+        return {
+          error: 'riskGate.allowWritePrompt is false — set it to true in dev-infra.config.json to apply prompt diffs',
+        };
+      }
+      try {
+        const payload = JSON.parse(row.payload_json) as { promptPath?: string; find?: string; replace?: string };
+        const { promptPath, find, replace } = payload;
+        if (!promptPath || typeof find !== 'string' || typeof replace !== 'string') {
+          applyErrors.push('payload missing promptPath / find / replace');
+        } else {
+          const fs = await import('node:fs');
+          if (!fs.existsSync(promptPath)) {
+            applyErrors.push(`prompt file not found: ${promptPath}`);
+          } else {
+            const current = fs.readFileSync(promptPath, 'utf8');
+            if (!current.includes(find)) {
+              applyErrors.push(`find-text not present in prompt — likely already edited or stale proposal`);
+            } else {
+              const next = current.replace(find, replace);
+              fs.writeFileSync(promptPath, next);
+            }
+          }
+        }
+      } catch (e) {
+        applyErrors.push(`apply failed: ${(e as Error).message}`);
+      }
+      // If apply errored, surface it to the caller and DON'T mark approved
+      // — the user can decide whether to re-attempt or reject instead.
+      if (applyErrors.length > 0) {
+        reply.code(500);
+        return { error: 'apply failed', applyErrors };
+      }
+    }
+
     decideApproval(req.params.id, decision, note);
-    // Emit a finding so the rail records the human decision.
+    // Emit a finding so the rail records the human decision. Use the
+    // originating agent name so dashboard filters work correctly.
+    const decisionAgent = isPromptDiff ? 'self-improve' : 'auto-fix-driver';
+    const decisionKind = isPromptDiff
+      ? (decision === 'approved' ? 'self:prompt-diff-applied' : 'self:prompt-diff-rejected')
+      : (decision === 'approved' ? 'auto-fix:approved' : 'auto-fix:rejected');
     emit({
       id: newId(),
-      agent: 'auto-fix-driver',
-      kind: decision === 'approved' ? 'auto-fix:approved' : 'auto-fix:rejected',
+      agent: decisionAgent,
+      kind: decisionKind,
       at: Date.now(),
-      severity: decision === 'rejected' && revertErrors.length > 0 ? 'warn' : 'info',
-      summary: decision === 'approved'
-        ? `approved cycle ${req.params.id.slice(0, 8)}`
-        : `rejected cycle ${req.params.id.slice(0, 8)} · ${revertErrors.length === 0 ? 'clean revert' : `${revertErrors.length} revert errors`}`,
-      payload: { approvalId: req.params.id, decision, note: note ?? null, revertErrors },
+      severity: (decision === 'rejected' && revertErrors.length > 0) ? 'warn' : 'info',
+      summary: isPromptDiff
+        ? (decision === 'approved'
+            ? `applied prompt diff for ${(JSON.parse(row.payload_json) as { targetAgent?: string }).targetAgent ?? '?'}`
+            : `rejected prompt diff ${req.params.id.slice(0, 8)}`)
+        : (decision === 'approved'
+            ? `approved cycle ${req.params.id.slice(0, 8)}`
+            : `rejected cycle ${req.params.id.slice(0, 8)} · ${revertErrors.length === 0 ? 'clean revert' : `${revertErrors.length} revert errors`}`),
+      payload: { approvalId: req.params.id, decision, note: note ?? null, revertErrors, applyErrors },
     } as Finding);
 
     if (revertErrors.length > 0) {

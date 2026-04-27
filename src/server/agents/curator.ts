@@ -282,6 +282,8 @@ const RULES: Record<string, Rule> = {
   'self:metrics-summary':       rule_skip('internal — dev-infra observability'),
   'self:described':             rule_skip('internal — self-awareness'),
   'self:prompt-diff-proposal':  rule_skip('internal — self-improve'),
+  'self:prompt-diff-applied':   rule_skip('internal — self-improve apply decision'),
+  'self:prompt-diff-rejected':  rule_skip('internal — self-improve apply decision'),
   'self:no-improvements-needed':rule_skip('internal — self-improve'),
   'self:agent-prompt-missing':  rule_skip('internal — self-improve'),
   // Doc-ingest: meta-knowledge about the docs, not a code concern.

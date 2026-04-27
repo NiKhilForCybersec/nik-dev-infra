@@ -20,6 +20,7 @@ type Approval = {
   decided_at: number | null;
   status: 'pending' | 'approved' | 'rejected';
   payload: {
+    // auto-fix:cycle-complete payload
     fingerprint?: string;
     concernText?: string;
     severity?: string;
@@ -29,6 +30,14 @@ type Approval = {
     durationMs?: number;
     claudeOutputTail?: string;
     diff?: { filesChanged: string[]; outOfScopeFiles: string[]; statTail: string };
+    // self:prompt-diff-proposal payload
+    targetAgent?: string;
+    promptPathRel?: string;
+    find?: string;
+    replace?: string;
+    rationale?: string | null;
+    monitorFinding?: string | null;
+    proposalSummary?: string;
   } | null;
 };
 
@@ -211,68 +220,112 @@ export function AutoFixPanel({ onClose }: { onClose: () => void }) {
             PENDING APPROVAL · {approvals.length}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {approvals.map((a) => (
-              <div key={a.id} className="glass" style={{ padding: 12, borderLeft: '3px solid var(--warn)' }}>
-                <div className="mono" style={{ fontSize: 9, color: 'var(--fg-3)' }}>
-                  {ago(a.created_at)} · {a.id.slice(0, 8)}
-                  {a.payload?.severity && <> · <span style={{ color: a.payload.severity === 'error' ? 'var(--err)' : a.payload.severity === 'warn' ? 'var(--warn)' : 'var(--fg-2)' }}>{a.payload.severity}</span></>}
-                </div>
-                {a.payload?.concernText && (
-                  <div style={{ fontSize: 12, color: 'var(--fg)', margin: '4px 0', whiteSpace: 'pre-wrap' }}>
-                    {a.payload.concernText.slice(0, 240)}{a.payload.concernText.length > 240 ? '…' : ''}
+            {approvals.map((a) => {
+              const isPromptDiff = a.kind === 'self:prompt-diff-proposal';
+              const rejectLabel = isPromptDiff ? 'REJECT' : 'REJECT (revert files)';
+              const tag = isPromptDiff ? 'PROMPT DIFF' : 'AUTO-FIX CYCLE';
+              return (
+                <div key={a.id} className="glass" style={{ padding: 12, borderLeft: '3px solid var(--warn)' }}>
+                  <div className="mono" style={{ fontSize: 9, color: 'var(--fg-3)' }}>
+                    <span style={{ color: 'var(--accent)' }}>{tag}</span> · {ago(a.created_at)} · {a.id.slice(0, 8)}
+                    {a.payload?.severity && <> · <span style={{ color: a.payload.severity === 'error' ? 'var(--err)' : a.payload.severity === 'warn' ? 'var(--warn)' : 'var(--fg-2)' }}>{a.payload.severity}</span></>}
                   </div>
-                )}
-                {a.payload?.diff && a.payload.diff.filesChanged.length > 0 && (
-                  <div style={{ marginTop: 6 }}>
-                    <div className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', letterSpacing: 1, marginBottom: 3 }}>
-                      FILES CHANGED · {a.payload.diff.filesChanged.length}
-                      {a.payload.diff.outOfScopeFiles.length > 0 && (
-                        <span style={{ color: 'var(--err)' }}> · {a.payload.diff.outOfScopeFiles.length} OUT-OF-SCOPE</span>
+
+                  {/* Concern body for auto-fix cycles */}
+                  {!isPromptDiff && a.payload?.concernText && (
+                    <div style={{ fontSize: 12, color: 'var(--fg)', margin: '4px 0', whiteSpace: 'pre-wrap' }}>
+                      {a.payload.concernText.slice(0, 240)}{a.payload.concernText.length > 240 ? '…' : ''}
+                    </div>
+                  )}
+
+                  {/* File diff for auto-fix cycles */}
+                  {!isPromptDiff && a.payload?.diff && a.payload.diff.filesChanged.length > 0 && (
+                    <div style={{ marginTop: 6 }}>
+                      <div className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', letterSpacing: 1, marginBottom: 3 }}>
+                        FILES CHANGED · {a.payload.diff.filesChanged.length}
+                        {a.payload.diff.outOfScopeFiles.length > 0 && (
+                          <span style={{ color: 'var(--err)' }}> · {a.payload.diff.outOfScopeFiles.length} OUT-OF-SCOPE</span>
+                        )}
+                      </div>
+                      {a.payload.diff.filesChanged.slice(0, 8).map((file, i) => {
+                        const oos = a.payload!.diff!.outOfScopeFiles.includes(file);
+                        return (
+                          <div key={i} className="mono" style={{ fontSize: 10, color: oos ? 'var(--err)' : 'var(--fg-2)' }}>
+                            {oos ? '⚠ ' : '· '}{file}
+                          </div>
+                        );
+                      })}
+                      {a.payload.diff.statTail && (
+                        <pre className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', whiteSpace: 'pre-wrap', marginTop: 6, maxHeight: 120, overflowY: 'auto' }}>{a.payload.diff.statTail}</pre>
                       )}
                     </div>
-                    {a.payload.diff.filesChanged.slice(0, 8).map((file, i) => {
-                      const oos = a.payload!.diff!.outOfScopeFiles.includes(file);
-                      return (
-                        <div key={i} className="mono" style={{ fontSize: 10, color: oos ? 'var(--err)' : 'var(--fg-2)' }}>
-                          {oos ? '⚠ ' : '· '}{file}
+                  )}
+
+                  {/* Prompt-diff body */}
+                  {isPromptDiff && (
+                    <div style={{ marginTop: 6 }}>
+                      <div className="mono" style={{ fontSize: 11, color: 'var(--fg)' }}>
+                        target agent: <b>{a.payload?.targetAgent ?? '?'}</b>
+                      </div>
+                      {a.payload?.promptPathRel && (
+                        <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>{a.payload.promptPathRel}</div>
+                      )}
+                      {a.payload?.proposalSummary && (
+                        <div style={{ fontSize: 12, color: 'var(--fg-2)', marginTop: 4 }}>{a.payload.proposalSummary}</div>
+                      )}
+                      {a.payload?.rationale && (
+                        <div style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 4, fontStyle: 'italic' }}>
+                          → {a.payload.rationale}
                         </div>
-                      );
-                    })}
-                    {a.payload.diff.statTail && (
-                      <pre className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', whiteSpace: 'pre-wrap', marginTop: 6, maxHeight: 120, overflowY: 'auto' }}>{a.payload.diff.statTail}</pre>
-                    )}
+                      )}
+                      {a.payload?.find && a.payload?.replace && (
+                        <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                          <div>
+                            <div className="mono" style={{ fontSize: 9, color: 'var(--err)', letterSpacing: 1, marginBottom: 3 }}>FIND (current)</div>
+                            <pre className="mono" style={{ fontSize: 10, color: 'var(--fg-2)', whiteSpace: 'pre-wrap', maxHeight: 200, overflowY: 'auto', background: 'rgba(255,107,107,0.08)', padding: 6, borderRadius: 4 }}>{a.payload.find}</pre>
+                          </div>
+                          <div>
+                            <div className="mono" style={{ fontSize: 9, color: 'var(--ok, #5fd49a)', letterSpacing: 1, marginBottom: 3 }}>REPLACE (proposed)</div>
+                            <pre className="mono" style={{ fontSize: 10, color: 'var(--fg-2)', whiteSpace: 'pre-wrap', maxHeight: 200, overflowY: 'auto', background: 'rgba(95,212,154,0.08)', padding: 6, borderRadius: 4 }}>{a.payload.replace}</pre>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Claude output (auto-fix only) */}
+                  {!isPromptDiff && a.payload?.claudeOutputTail && (
+                    <details style={{ marginTop: 8 }}>
+                      <summary className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', letterSpacing: 1, cursor: 'pointer' }}>CLAUDE OUTPUT (tail)</summary>
+                      <pre className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', whiteSpace: 'pre-wrap', maxHeight: 200, overflowY: 'auto', marginTop: 4 }}>{a.payload.claudeOutputTail}</pre>
+                    </details>
+                  )}
+
+                  <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                    <button
+                      onClick={() => void decide(a.id, 'approved')}
+                      disabled={decidingId !== null}
+                      className="mono"
+                      style={{
+                        padding: '6px 14px', fontSize: 11, letterSpacing: 1,
+                        color: 'var(--ok, #5fd49a)', borderColor: 'var(--ok, #5fd49a)',
+                        cursor: decidingId !== null ? 'wait' : 'pointer',
+                      }}
+                    >{decidingId === a.id ? 'DECIDING…' : (isPromptDiff ? 'APPROVE (apply diff)' : 'APPROVE')}</button>
+                    <button
+                      onClick={() => void decide(a.id, 'rejected')}
+                      disabled={decidingId !== null}
+                      className="mono"
+                      style={{
+                        padding: '6px 14px', fontSize: 11, letterSpacing: 1,
+                        color: 'var(--err)', borderColor: 'var(--err)',
+                        cursor: decidingId !== null ? 'wait' : 'pointer',
+                      }}
+                    >{decidingId === a.id ? 'DECIDING…' : rejectLabel}</button>
                   </div>
-                )}
-                {a.payload?.claudeOutputTail && (
-                  <details style={{ marginTop: 8 }}>
-                    <summary className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', letterSpacing: 1, cursor: 'pointer' }}>CLAUDE OUTPUT (tail)</summary>
-                    <pre className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', whiteSpace: 'pre-wrap', maxHeight: 200, overflowY: 'auto', marginTop: 4 }}>{a.payload.claudeOutputTail}</pre>
-                  </details>
-                )}
-                <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
-                  <button
-                    onClick={() => void decide(a.id, 'approved')}
-                    disabled={decidingId !== null}
-                    className="mono"
-                    style={{
-                      padding: '6px 14px', fontSize: 11, letterSpacing: 1,
-                      color: 'var(--ok, #5fd49a)', borderColor: 'var(--ok, #5fd49a)',
-                      cursor: decidingId !== null ? 'wait' : 'pointer',
-                    }}
-                  >{decidingId === a.id ? 'DECIDING…' : 'APPROVE'}</button>
-                  <button
-                    onClick={() => void decide(a.id, 'rejected')}
-                    disabled={decidingId !== null}
-                    className="mono"
-                    style={{
-                      padding: '6px 14px', fontSize: 11, letterSpacing: 1,
-                      color: 'var(--err)', borderColor: 'var(--err)',
-                      cursor: decidingId !== null ? 'wait' : 'pointer',
-                    }}
-                  >{decidingId === a.id ? 'DECIDING…' : 'REJECT (revert files)'}</button>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

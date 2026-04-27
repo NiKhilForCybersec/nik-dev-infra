@@ -24,7 +24,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseJsonArray, runClaude } from '../claude.ts';
 import { newId, parseFinding, rejectedFinding } from '../findings.ts';
-import { query } from '../memory.ts';
+import { query, recordApproval } from '../memory.ts';
 import type { Agent, Finding } from '../types.ts';
 import { SelfImproveFindingSchema } from './schemas.ts';
 
@@ -130,7 +130,33 @@ ${JSON.stringify(problems, null, 2).slice(0, 16_000)}
         }
       } else {
         for (const item of raw.slice(0, 5)) {
-          out.push(parseFinding('self-improve', item, SelfImproveFindingSchema));
+          const finding = parseFinding('self-improve', item, SelfImproveFindingSchema);
+          out.push(finding);
+          // For each prompt-diff proposal, also queue an approval row
+          // so the user can apply the diff via the dashboard. Skipped for
+          // the other kinds (no-improvements-needed, prompt-missing) —
+          // those are informational, nothing to apply.
+          if (finding.kind === 'self:prompt-diff-proposal' && finding.payload) {
+            const p = finding.payload as { agent?: string; find?: string; replace?: string; rationale?: string };
+            if (typeof p.agent === 'string' && typeof p.find === 'string' && typeof p.replace === 'string') {
+              const promptPath = resolve(repoRoot, 'src/server/agents', `${p.agent}.md`);
+              recordApproval({
+                id: newId(),
+                agent: 'self-improve',
+                kind: 'self:prompt-diff-proposal',
+                payload: {
+                  targetAgent: p.agent,
+                  promptPath,
+                  promptPathRel: `src/server/agents/${p.agent}.md`,
+                  find: p.find,
+                  replace: p.replace,
+                  rationale: p.rationale ?? null,
+                  monitorFinding: seenAgents.get(p.agent)?.summary ?? null,
+                  proposalSummary: finding.summary,
+                },
+              });
+            }
+          }
         }
       }
     } catch (e) {
