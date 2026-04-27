@@ -60,7 +60,8 @@ const ALLOWED_TOOLS = ['Read', 'Edit', 'Write', 'Glob', 'Grep'];
 
 // ─── parsing ────────────────────────────────────────────────────────────────
 
-function parseConcerns(body: string): Concern[] {
+// Exported for unit testing; not part of the agent's public surface.
+export function parseConcerns(body: string): Concern[] {
   const lines = body.split('\n');
   const out: Concern[] = [];
   for (let i = 0; i < lines.length; i++) {
@@ -86,7 +87,7 @@ function parseConcerns(body: string): Concern[] {
   return out;
 }
 
-function fingerprint(text: string): string {
+export function fingerprint(text: string): string {
   // Normalize: lowercase, collapse whitespace, strip markdown decorations,
   // strip the per-finding id + ISO timestamp (those change each curator pass).
   const norm = text
@@ -221,7 +222,7 @@ async function gitDiffSummary(headBefore: string): Promise<{ filesChanged: strin
 // to bound dispatch. Treat fileRef-less concerns as out-of-scope when
 // scopes is non-empty: there's no way to verify the dispatched session
 // would stay within bounds. The user widens scope by adding more globs.
-function isInScope(concern: Concern): boolean {
+export function isInScope(concern: Concern): boolean {
   const scopes = config.autoFixLoop.scopes;
   if (scopes.length === 0) return true;
   if (!concern.fileRef) return false;
@@ -259,7 +260,7 @@ function consecutiveFailures(): number {
 
 type ActionableCheck = { actionable: true } | { actionable: false; reason: string };
 
-function isActionable(concern: Concern, brokenVerdict: CuratorVerdict | undefined): ActionableCheck {
+export function isActionable(concern: Concern, brokenVerdict: CuratorVerdict | undefined): ActionableCheck {
   // Hard-path: a concern only goes to dispatch when we're confident about
   // both WHAT to fix and WHERE. Otherwise it gets needs-clarification and
   // the user (or curator next pass) tightens the wording.

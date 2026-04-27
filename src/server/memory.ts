@@ -30,7 +30,11 @@ import { fileURLToPath } from 'node:url';
 import type { Finding } from './types.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = resolve(here, '../../data');
+// DATA_DIR can be overridden for tests / sandboxing via DEV_INFRA_DATA_DIR.
+// Default points at `<repo-root>/data` next to the source tree.
+const DATA_DIR = process.env.DEV_INFRA_DATA_DIR
+  ? resolve(process.env.DEV_INFRA_DATA_DIR)
+  : resolve(here, '../../data');
 const NOTEBOOKS_DIR = resolve(DATA_DIR, 'notebooks');
 const DB_FILE = resolve(DATA_DIR, 'memory.db');
 
@@ -776,6 +780,19 @@ const sqliteVacuum = db.prepare('VACUUM');
  *  memory-keeper schedules it sparingly. */
 export function vacuum(): void {
   sqliteVacuum.run();
+}
+
+/** TEST-ONLY: wipe every mutable table so vitest cases get a clean
+ *  slate between assertions. Throws when called outside a test
+ *  context (NODE_ENV=test or DEV_INFRA_DATA_DIR set), so a stray
+ *  call from agent code can't accidentally nuke the live DB. */
+export function _resetTables(): void {
+  if (process.env.NODE_ENV !== 'test' && !process.env.DEV_INFRA_DATA_DIR) {
+    throw new Error('_resetTables() is test-only — refusing to wipe the live DB');
+  }
+  for (const t of ['findings', 'facts', 'register', 'code_files', 'agent_runs', 'agent_summaries', 'notes', 'segments', 'wiki', 'wiki_revisions', 'hooks', 'promotions']) {
+    try { db.prepare(`DELETE FROM ${t}`).run(); } catch { /* table may not exist on older schemas */ }
+  }
 }
 
 // ─── code_files cache (codebase-graph agent) ─────────────────────────────

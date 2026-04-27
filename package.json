@@ -13,7 +13,9 @@
     "verify:ws": "node scripts/verify-ws.mjs",
     "screenshots:login": "node scripts/screenshots-login.mjs",
     "screenshots": "node scripts/take-screenshots.mjs",
-    "init": "node scripts/init.mjs"
+    "init": "node scripts/init.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",
@@ -39,10 +41,12 @@
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
     "@vitejs/plugin-react": "^4.3.4",
+    "@vitest/coverage-v8": "^4.1.5",
     "concurrently": "^9.1.2",
     "playwright": "^1.59.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "vite": "^6.0.7"
+    "vite": "^6.0.7",
+    "vitest": "^4.1.5"
   }
 }

@@ -27,7 +27,10 @@ import { recordFinding, recordRun } from './memory.ts';
 import type { AgentRun, Finding } from './types.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = resolve(here, '../../data');
+// DATA_DIR can be overridden for tests / sandboxing via DEV_INFRA_DATA_DIR.
+const DATA_DIR = process.env.DEV_INFRA_DATA_DIR
+  ? resolve(process.env.DEV_INFRA_DATA_DIR)
+  : resolve(here, '../../data');
 const LOG_FILE = resolve(DATA_DIR, 'findings.jsonl');
 const RING_MAX = 500;
 const RUNS_MAX = 200;
