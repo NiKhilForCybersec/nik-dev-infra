@@ -6,8 +6,11 @@ import type { Agent, RiskClass } from '../types.ts';
 import { accessibilityAgent } from './accessibility.ts';
 import { aiCoverageAgent } from './ai-coverage.ts';
 import { autoFixDriverAgent } from './auto-fix-driver.ts';
+import { codeChangeTrackerAgent } from './code-change-tracker.ts';
 import { codebaseGraphAgent } from './codebase-graph.ts';
+import { concernsIngestAgent } from './concerns-ingest.ts';
 import { intentExtractorAgent } from './intent-extractor.ts';
+import { resolutionsIngestAgent } from './resolutions-ingest.ts';
 import { testCoverageAgent } from './test-coverage.ts';
 import { bindingsAgent } from './bindings.ts';
 import { bootstrapAgent } from './bootstrap.ts';
@@ -43,6 +46,9 @@ export const ALL_AGENTS: Agent[] = [
   codebaseGraphAgent,   // deterministic — Tree-sitter AST extraction (user-repo knowledge graph phase 1)
   intentExtractorAgent, // claude -p — per-module intent summary (knowledge graph phase 2)
   testCoverageAgent,    // deterministic — exports without test coverage become Concerns.md gaps
+  concernsIngestAgent,  // deterministic — Concerns.md bullets → memory entities (kind: concern)
+  resolutionsIngestAgent, // deterministic — Resolutions.md entries → memory entities (kind: resolution); links to concerns
+  codeChangeTrackerAgent, // deterministic — git log + git status → commit + file-activity entities + facts
   llmCostAgent,         // deterministic — tails Supabase llm_calls table
   secretsAgent,         // deterministic — regex scan for committed secrets
   memoryKeeperAgent,    // deterministic — owner of the memory layer's integrity
@@ -93,6 +99,9 @@ export const RISK_CLASS_BY_AGENT: Record<string, RiskClass> = {
   'codebase-graph':'write-memory',
   'intent-extractor':'write-memory',
   'test-coverage': 'write-memory',
+  'concerns-ingest': 'write-memory',
+  'resolutions-ingest': 'write-memory',
+  'code-change-tracker': 'write-memory',
   secrets:         'write-memory',
   'memory-keeper': 'write-memory',
   screenshots:     'write-user-repo',  // unlinkSync of PNGs in <repo>/docs/screenshots — gated by riskGate.allowWriteUserRepo

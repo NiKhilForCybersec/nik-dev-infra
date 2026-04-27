@@ -5,7 +5,7 @@
  * existing memory.ts helpers, no new state.
  */
 
-import { addFact, decideApproval, entities, factsByPredicate, getApproval, listApprovals, lookup, query, recallAll, registerEntity, wikiList, wikiRead } from '../../memory.ts';
+import { addFact, decideApproval, entities, getApproval, listApprovals, lookup, query, registerEntity, wikiList, wikiRead } from '../../memory.ts';
 import { newId } from '../../findings.ts';
 
 type ToolDef = {
@@ -125,9 +125,36 @@ export async function callGeneralTool(name: string, args: Json): Promise<ToolRes
     case 'memory.recall': {
       const q = reqString(args, 'query');
       const limit = Math.min(typeof args.limit === 'number' ? args.limit : 20, 100);
-      const hits = recallAll(q, limit);
-      if (hits.length === 0) return ok(`(no memory rows match "${q}")`);
-      return json({ query: q, count: hits.length, hits });
+      const like = `%${q}%`;
+      const perLayer = Math.max(2, Math.floor(limit / 4));
+      // Search four layers in parallel: notes (key+value), facts
+      // (subject/object/predicate), wiki (body), register (label).
+      const noteHits = query<{ agent: string; key: string; value_json: string; at: number }>(
+        `SELECT agent, key, value_json, at FROM notes WHERE key LIKE ? OR value_json LIKE ? ORDER BY at DESC LIMIT ?`,
+        [like, like, perLayer],
+      );
+      const factHits = query<{ subject: string; predicate: string; object: string; agent: string; at: number }>(
+        `SELECT subject, predicate, object, agent, at FROM facts WHERE subject LIKE ? OR object LIKE ? OR predicate LIKE ? ORDER BY at DESC LIMIT ?`,
+        [like, like, like, perLayer],
+      );
+      const wikiHits = query<{ segment: string; topic: string; updated_at: number }>(
+        `SELECT segment, topic, updated_at FROM wiki WHERE topic LIKE ? OR body_md LIKE ? ORDER BY updated_at DESC LIMIT ?`,
+        [like, like, perLayer],
+      );
+      const registerHits = query<{ urn: string; kind: string; label: string; segment: string | null; at: number }>(
+        `SELECT urn, kind, label, segment, at FROM register WHERE urn LIKE ? OR label LIKE ? ORDER BY at DESC LIMIT ?`,
+        [like, like, perLayer],
+      );
+      const total = noteHits.length + factHits.length + wikiHits.length + registerHits.length;
+      if (total === 0) return ok(`(no memory rows match "${q}")`);
+      return json({
+        query: q,
+        total,
+        notes: noteHits.map((r) => ({ ...r, at: new Date(r.at).toISOString() })),
+        facts: factHits.map((r) => ({ ...r, at: new Date(r.at).toISOString() })),
+        wiki: wikiHits.map((r) => ({ ...r, updated_at: new Date(r.updated_at).toISOString() })),
+        register: registerHits.map((r) => ({ ...r, at: new Date(r.at).toISOString() })),
+      });
     }
     case 'memory.facts.find': {
       const subject = typeof args.subject === 'string' ? args.subject : null;

@@ -319,6 +319,16 @@ const RULES: Record<string, Rule> = {
   'coverage:closed':                rule_skip('internal — coverage gap resolved'),
   'coverage:no-test-files':         rule_skip('internal — config nudge'),
   'coverage:no-framework':          rule_skip('internal — config nudge'),
+  // Ingester agents — meta-events about ingestion runs themselves;
+  // the actual concerns / resolutions reach memory via register entities.
+  'concerns-ingest:summary':        rule_skip('internal — ingest digest'),
+  'concerns-ingest:no-file':        rule_skip('internal — config state'),
+  'concerns-ingest:read-failed':    rule_skip('internal — file IO error'),
+  'resolutions-ingest:summary':     rule_skip('internal — ingest digest'),
+  'resolutions-ingest:no-file':     rule_skip('internal — config state'),
+  'resolutions-ingest:read-failed': rule_skip('internal — file IO error'),
+  'code-change:summary':            rule_skip('internal — git tracker digest'),
+  'code-change:git-error':          rule_skip('internal — git unavailable / bad range'),
   // coverage:gap-discovered + coverage:fix-without-test fall through to
   // the default rule — they ARE user concerns and should reach
   // Concerns.md when writeback is on.

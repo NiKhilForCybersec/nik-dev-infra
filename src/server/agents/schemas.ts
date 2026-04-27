@@ -270,6 +270,29 @@ export const TestCoverageFindingSchema = Base.extend({
   ]),
 });
 
+export const ConcernsIngestFindingSchema = Base.extend({
+  kind: z.enum([
+    'concerns-ingest:summary',
+    'concerns-ingest:no-file',
+    'concerns-ingest:read-failed',
+  ]),
+});
+
+export const ResolutionsIngestFindingSchema = Base.extend({
+  kind: z.enum([
+    'resolutions-ingest:summary',
+    'resolutions-ingest:no-file',
+    'resolutions-ingest:read-failed',
+  ]),
+});
+
+export const CodeChangeTrackerFindingSchema = Base.extend({
+  kind: z.enum([
+    'code-change:summary',
+    'code-change:git-error',
+  ]),
+});
+
 export const ScreenProberFindingSchema = Base.extend({
   kind: z.enum([
     'screen-prober:run-complete',
@@ -393,6 +416,9 @@ export const SCHEMA_BY_AGENT = {
   'codebase-graph': CodebaseGraphFindingSchema,
   'intent-extractor': IntentExtractorFindingSchema,
   'test-coverage': TestCoverageFindingSchema,
+  'concerns-ingest': ConcernsIngestFindingSchema,
+  'resolutions-ingest': ResolutionsIngestFindingSchema,
+  'code-change-tracker': CodeChangeTrackerFindingSchema,
   'auto-fix-driver': AutoFixDriverFindingSchema,
   snapshotter: SnapshotterFindingSchema,
   curator: CuratorFindingSchema,
