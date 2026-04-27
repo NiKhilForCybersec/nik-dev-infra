@@ -10,6 +10,7 @@ import { codeChangeTrackerAgent } from './code-change-tracker.ts';
 import { codebaseGraphAgent } from './codebase-graph.ts';
 import { concernsIngestAgent } from './concerns-ingest.ts';
 import { intentExtractorAgent } from './intent-extractor.ts';
+import { linkerAgent } from './linker.ts';
 import { resolutionsIngestAgent } from './resolutions-ingest.ts';
 import { testCoverageAgent } from './test-coverage.ts';
 import { bindingsAgent } from './bindings.ts';
@@ -49,6 +50,7 @@ export const ALL_AGENTS: Agent[] = [
   concernsIngestAgent,  // deterministic — Concerns.md bullets → memory entities (kind: concern)
   resolutionsIngestAgent, // deterministic — Resolutions.md entries → memory entities (kind: resolution); links to concerns
   codeChangeTrackerAgent, // deterministic — git log + git status → commit + file-activity entities + facts
+  linkerAgent,          // deterministic — coordination layer: bridges pseudo-URN dead-ends + registers wiki cells + links commits↔concerns
   llmCostAgent,         // deterministic — tails Supabase llm_calls table
   secretsAgent,         // deterministic — regex scan for committed secrets
   memoryKeeperAgent,    // deterministic — owner of the memory layer's integrity
@@ -102,6 +104,7 @@ export const RISK_CLASS_BY_AGENT: Record<string, RiskClass> = {
   'concerns-ingest': 'write-memory',
   'resolutions-ingest': 'write-memory',
   'code-change-tracker': 'write-memory',
+  linker:          'write-memory',
   secrets:         'write-memory',
   'memory-keeper': 'write-memory',
   screenshots:     'write-user-repo',  // unlinkSync of PNGs in <repo>/docs/screenshots — gated by riskGate.allowWriteUserRepo

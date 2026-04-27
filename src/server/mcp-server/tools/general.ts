@@ -137,8 +137,8 @@ export async function callGeneralTool(name: string, args: Json): Promise<ToolRes
         `SELECT subject, predicate, object, agent, at FROM facts WHERE subject LIKE ? OR object LIKE ? OR predicate LIKE ? ORDER BY at DESC LIMIT ?`,
         [like, like, like, perLayer],
       );
-      const wikiHits = query<{ segment: string; topic: string; at: number }>(
-        `SELECT segment, topic, at FROM wiki_pages WHERE topic LIKE ? OR content LIKE ? ORDER BY at DESC LIMIT ?`,
+      const wikiHits = query<{ segment: string; topic: string; agent: string; confidence: number; at: number }>(
+        `SELECT segment, topic, agent, confidence, at FROM wiki_pages WHERE topic LIKE ? OR content LIKE ? ORDER BY at DESC LIMIT ?`,
         [like, like, perLayer],
       );
       const registerHits = query<{ urn: string; kind: string; label: string; segment: string | null; at: number }>(
@@ -152,7 +152,7 @@ export async function callGeneralTool(name: string, args: Json): Promise<ToolRes
         total,
         notes: noteHits.map((r) => ({ ...r, at: new Date(r.at).toISOString() })),
         facts: factHits.map((r) => ({ ...r, at: new Date(r.at).toISOString() })),
-        wiki: wikiHits.map((r) => ({ ...r, updated_at: new Date(r.updated_at).toISOString() })),
+        wiki: wikiHits.map((r) => ({ ...r, at: new Date(r.at).toISOString() })),
         register: registerHits.map((r) => ({ ...r, at: new Date(r.at).toISOString() })),
       });
     }
@@ -187,13 +187,13 @@ export async function callGeneralTool(name: string, args: Json): Promise<ToolRes
       const segment = reqString(args, 'segment');
       const topic = typeof args.topic === 'string' ? args.topic : null;
       if (topic) {
-        const r = wikiRead({ segment, topic });
+        const r = wikiRead(segment, topic);
         if (!r) return ok(`(no wiki page for ${segment}/${topic})`);
-        return ok(r.body_md);
+        return ok(r.content);
       }
-      const list = wikiList({ segment });
+      const list = wikiList(segment);
       if (list.length === 0) return ok(`(no wiki pages in segment ${segment})`);
-      return json({ segment, topics: list.map((p) => ({ topic: p.topic, version: p.version, updatedAt: new Date(p.updatedAt).toISOString() })) });
+      return json({ segment, topics: list.map((p) => ({ topic: p.topic, agent: p.agent, confidence: p.confidence, updatedAt: new Date(p.at).toISOString() })) });
     }
     case 'memory.entities.get': {
       const urn = reqString(args, 'urn');

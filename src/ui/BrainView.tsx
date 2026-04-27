@@ -525,7 +525,7 @@ export function BrainView({ onClose }: { onClose: () => void }) {
                 // Hash the source-id to deterministically pick ~10% of
                 // links to carry an ambient particle. Stable so the same
                 // edges always glow (pattern, not chaos).
-                const hash = (sId + tId).split('').reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 0);
+                const hash = (sId + tId).split('').reduce((a: number, c: string) => (a * 31 + c.charCodeAt(0)) | 0, 0);
                 return Math.abs(hash) % 10 === 0 ? 1 : 0;
               }}
               linkDirectionalParticleSpeed={(l: any) => {

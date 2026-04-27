@@ -293,6 +293,13 @@ export const CodeChangeTrackerFindingSchema = Base.extend({
   ]),
 });
 
+export const LinkerFindingSchema = Base.extend({
+  kind: z.enum([
+    'linker:summary',
+    'linker:no-data',
+  ]),
+});
+
 export const ScreenProberFindingSchema = Base.extend({
   kind: z.enum([
     'screen-prober:run-complete',
@@ -419,6 +426,7 @@ export const SCHEMA_BY_AGENT = {
   'concerns-ingest': ConcernsIngestFindingSchema,
   'resolutions-ingest': ResolutionsIngestFindingSchema,
   'code-change-tracker': CodeChangeTrackerFindingSchema,
+  linker: LinkerFindingSchema,
   'auto-fix-driver': AutoFixDriverFindingSchema,
   snapshotter: SnapshotterFindingSchema,
   curator: CuratorFindingSchema,

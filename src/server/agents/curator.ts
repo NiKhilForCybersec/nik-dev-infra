@@ -307,6 +307,8 @@ const RULES: Record<string, Rule> = {
   'codebase-graph:summary':         rule_skip('internal — AST extraction digest'),
   'codebase-graph:no-source':       rule_skip('internal — no source to parse'),
   'codebase-graph:tree-sitter-missing': rule_skip('internal — native binding setup'),
+  'linker:summary':                 rule_skip('internal — coordination layer digest'),
+  'linker:no-data':                 rule_skip('internal — register empty, nothing to link'),
   'intent:extracted':               rule_skip('internal — knowledge graph enrichment'),
   'intent:deferred':                rule_skip('internal — knowledge graph deferral'),
   'intent:malformed':               rule_skip('internal — LLM output schema reject'),
