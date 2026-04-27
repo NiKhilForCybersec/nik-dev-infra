@@ -70,6 +70,28 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
   const [selectedStatuses, setSelectedStatuses] = useState<Set<Status>>(new Set(Object.keys(STATUS_COLOR) as Status[]));
   const [selected, setSelected] = useState<{ id: string; entity?: Entity; touching: Finding[] } | null>(null);
   const [hover, setHover] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [intents, setIntents] = useState<Map<string, string>>(new Map());
+
+  // Load knowledge-graph intent summaries (per-module purpose / used-by /
+  // depends-on / fragile-when). Polled less aggressively than the rest
+  // of the snapshot since the intent extractor only writes ~2/cycle.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await fetch('/api/code-intents');
+        if (!r.ok) return;
+        const d = (await r.json()) as { intents: { path: string; summary: string }[] };
+        if (cancelled) return;
+        const m = new Map<string, string>();
+        for (const i of d.intents) m.set(`module:${i.path}`, i.summary);
+        setIntents(m);
+      } catch { /* */ }
+    };
+    void tick();
+    const id = setInterval(tick, 30_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
 
   // Load all three feeds in parallel.
   useEffect(() => {
@@ -531,6 +553,14 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
               {hoverDetail.lastTouchAgo !== null && (
                 <div className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', marginTop: 4 }}>
                   touched {hoverDetail.lastTouchAgo < 60 ? `${hoverDetail.lastTouchAgo}s` : hoverDetail.lastTouchAgo < 3600 ? `${Math.round(hoverDetail.lastTouchAgo / 60)}m` : hoverDetail.lastTouchAgo < 86400 ? `${Math.round(hoverDetail.lastTouchAgo / 3600)}h` : `${Math.round(hoverDetail.lastTouchAgo / 86400)}d`} ago
+                </div>
+              )}
+              {intents.has(hover.id) && (
+                <div style={{ marginTop: 8, paddingTop: 6, borderTop: '1px solid var(--hairline)' }}>
+                  <div className="mono" style={{ fontSize: 9, color: 'var(--accent)', letterSpacing: 1, marginBottom: 3 }}>INTENT</div>
+                  <div style={{ fontSize: 11, color: 'var(--fg-2)', lineHeight: 1.4 }}>
+                    {intents.get(hover.id)}
+                  </div>
                 </div>
               )}
             </div>

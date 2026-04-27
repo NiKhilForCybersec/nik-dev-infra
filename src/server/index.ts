@@ -227,6 +227,26 @@ app.post<{ Params: { name: string } }>('/api/agents/:name/run', async (req, repl
 // capture script either timed out before paint or hit an error state.
 // We surface `isBlank: true` so the UI can show a "re-run" hint instead
 // of a useless white image.
+// REST: per-module intent summaries from the knowledge graph
+// (codebase-graph + intent-extractor agents). Returns the parsed
+// "purpose" sentence — a short, hover-displayable string. Modules
+// without an intent yet are simply absent from the response.
+app.get('/api/code-intents', async () => {
+  const rows = query<{ path: string; intent_summary: string | null }>(
+    `SELECT path, intent_summary FROM code_files WHERE intent_summary IS NOT NULL`,
+  );
+  const intents: { path: string; summary: string }[] = [];
+  for (const r of rows) {
+    if (!r.intent_summary) continue;
+    try {
+      const j = JSON.parse(r.intent_summary) as { shape?: string; purpose?: string; deferred?: string };
+      if (j.shape === 'A' && j.purpose) intents.push({ path: r.path, summary: j.purpose });
+      else if (j.shape === 'B' && j.deferred) intents.push({ path: r.path, summary: `(deferred: ${j.deferred})` });
+    } catch { /* malformed — skip */ }
+  }
+  return { intents };
+});
+
 app.get('/api/screenshots-meta', async () => {
   const dir = resolve(config.targetPath, config.screenshotsDir);
   const fs = await import('node:fs');
