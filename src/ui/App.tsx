@@ -70,6 +70,10 @@ export function App() {
   const [entitiesOpen, setEntitiesOpen] = useState(false);
   const [screensOpen, setScreensOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
+  // Per-agent in-flight tracking so the manual "run" button shows visible
+  // pending state instead of fire-and-forget. Cleared when the next `run`
+  // event for that agent arrives over WebSocket.
+  const [pending, setPending] = useState<Set<string>>(new Set());
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -109,6 +113,15 @@ export function App() {
           } else if (msg.type === 'run') {
             setRuns((prev) => [...prev, msg.run].slice(-200));
             setLastLiveAt(Date.now());
+            // Clear the pending state for this agent so the run-button
+            // returns to its idle label and the chip border updates to
+            // green / red based on the run's ok flag.
+            setPending((prev) => {
+              if (!prev.has(msg.run.agent)) return prev;
+              const next = new Set(prev);
+              next.delete(msg.run.agent);
+              return next;
+            });
           }
         } catch { /* ignore */ }
       };
@@ -251,8 +264,37 @@ export function App() {
                   onClick={() => setFilterAgent(a.name)}
                   lastRunAt={lr?.startedAt}
                   lastRunOk={lr?.ok}
+                  pending={pending.has(a.name)}
                   onRunNow={() => {
-                    void fetch(`/api/agents/${a.name}/run`, { method: 'POST' });
+                    setPending((prev) => {
+                      if (prev.has(a.name)) return prev;
+                      const next = new Set(prev);
+                      next.add(a.name);
+                      return next;
+                    });
+                    fetch(`/api/agents/${a.name}/run`, { method: 'POST' })
+                      .then((r) => {
+                        // The orchestrator queues the run synchronously and
+                        // a `run` event lands when it actually finishes —
+                        // setPending(remove) happens there. If the POST
+                        // itself fails, drop the pending state immediately.
+                        if (!r.ok) {
+                          setPending((prev) => {
+                            if (!prev.has(a.name)) return prev;
+                            const next = new Set(prev);
+                            next.delete(a.name);
+                            return next;
+                          });
+                        }
+                      })
+                      .catch(() => {
+                        setPending((prev) => {
+                          if (!prev.has(a.name)) return prev;
+                          const next = new Set(prev);
+                          next.delete(a.name);
+                          return next;
+                        });
+                      });
                   }}
                 />
               );
@@ -339,6 +381,7 @@ function AgentChip(props: {
   lastRunAt?: number;
   lastRunOk?: boolean;
   onRunNow?: () => void;
+  pending?: boolean;
 }) {
   const lastRunStr = props.lastRunAt ? ago(props.lastRunAt) : null;
   // 24h cap for "stale". Beyond that, tint orange.
@@ -386,10 +429,16 @@ function AgentChip(props: {
           </span>
           {props.onRunNow && (
             <button
-              onClick={(e) => { e.stopPropagation(); props.onRunNow!(); }}
+              onClick={(e) => { e.stopPropagation(); if (!props.pending) props.onRunNow!(); }}
+              disabled={props.pending}
               className="mono"
-              style={{ padding: '1px 6px', fontSize: 9, color: 'var(--accent)', borderColor: 'var(--accent-soft)' }}
-            >run</button>
+              style={{
+                padding: '1px 6px', fontSize: 9,
+                color: props.pending ? 'var(--fg-3)' : 'var(--accent)',
+                borderColor: props.pending ? 'var(--hairline)' : 'var(--accent-soft)',
+                cursor: props.pending ? 'wait' : 'pointer',
+              }}
+            >{props.pending ? 'running…' : 'run'}</button>
           )}
         </div>
       )}
