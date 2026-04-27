@@ -151,6 +151,142 @@ async function bypassAuthIfPresent(page) {
   return false;
 }
 
+/** When no demo button exists, fall back to creating (or signing in
+ *  with) a stable test account. The credentials are persisted to
+ *  data/test-account.json — same email reused across runs so we don't
+ *  spam the user's auth backend. After a successful sign-in we save
+ *  storageState back to playwright-auth.json (the main loop reads
+ *  that on next session creation).
+ *
+ *  Returns:
+ *    - 'bypassed'    — auth chrome left the DOM (success)
+ *    - 'no-form'     — no email/password form detected (give up)
+ *    - 'attempted'   — clicked submit but auth chrome is still there
+ *
+ *  Hard-path: only attempted ONCE per script run (cached) since each
+ *  attempt costs seconds + may rate-limit the user's backend. */
+let testAccountAttempted = false;
+async function tryCreateOrSignInTestAccount(page) {
+  if (testAccountAttempted) return 'no-form';
+  testAccountAttempted = true;
+
+  // Stable per-install credentials so we sign IN on subsequent runs
+  // instead of creating a new account each time.
+  const fs = await import('node:fs');
+  const credPath = resolve(DATA_DIR, 'test-account.json');
+  let creds;
+  if (fs.existsSync(credPath)) {
+    try { creds = JSON.parse(fs.readFileSync(credPath, 'utf8')); } catch { /* */ }
+  }
+  if (!creds) {
+    // Gmail aliasing: anything after `+` gets stripped → all variants
+    // hit the same inbox if the user wires one up. Random suffix keeps
+    // it unique across reinstalls so resetting the auth dir gives a
+    // fresh account instead of re-using a stale one.
+    const suffix = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    creds = {
+      email: `nik-dev-infra+${suffix}@example.com`,
+      password: `dev-infra-${suffix}-Aa1!`,
+      createdAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(credPath, JSON.stringify(creds, null, 2));
+    console.log(`[shots] generated test account ${creds.email} → ${credPath}`);
+  }
+
+  // Look for an email input + a password input. Try common selectors.
+  const emailInput = page.locator('input[type="email"], input[name*="email" i], input[autocomplete="email"]').first();
+  const passwordInput = page.locator('input[type="password"], input[name*="password" i]').first();
+  const hasEmail = await emailInput.isVisible({ timeout: 1000 }).catch(() => false);
+  const hasPassword = await passwordInput.isVisible({ timeout: 1000 }).catch(() => false);
+  if (!hasEmail || !hasPassword) {
+    console.warn(`[shots] no email/password form found — auth bypass not possible automatically`);
+    return 'no-form';
+  }
+
+  // Two-shot strategy: try sign-up first (most pages have it visible
+  // alongside sign-in). If that errors with "user exists" or similar,
+  // click the sign-in toggle and try again with the same credentials.
+  for (const intent of ['signup', 'signin']) {
+    const switchLabels = intent === 'signup'
+      ? [/^sign up$/i, /^create account$/i, /^register$/i, /^get started$/i]
+      : [/^sign in$/i, /^log in$/i, /^login$/i];
+    // Best-effort: click the matching tab/link if present. If only a
+    // single form is shown, this is a no-op and we proceed.
+    for (const label of switchLabels) {
+      try {
+        const link = page.getByRole('link', { name: label }).or(page.getByRole('tab', { name: label })).first();
+        if (await link.isVisible({ timeout: 500 }).catch(() => false)) {
+          await link.click({ timeout: 1000 }).catch(() => {});
+          await page.waitForTimeout(400);
+          break;
+        }
+      } catch { /* */ }
+    }
+
+    try {
+      await emailInput.fill(creds.email).catch(() => {});
+      await passwordInput.fill(creds.password).catch(() => {});
+
+      const submitLabels = intent === 'signup'
+        ? [/^sign up$/i, /^create account$/i, /^register$/i, /^get started$/i, /^continue$/i]
+        : [/^sign in$/i, /^log in$/i, /^login$/i, /^continue$/i];
+      let clicked = false;
+      for (const label of submitLabels) {
+        try {
+          const submit = page.getByRole('button', { name: label }).first();
+          if (await submit.isVisible({ timeout: 500 }).catch(() => false)) {
+            await submit.click({ timeout: 1500 }).catch(() => {});
+            clicked = true;
+            break;
+          }
+        } catch { /* */ }
+      }
+      if (!clicked) {
+        // Fallback — Enter on the password field.
+        await passwordInput.press('Enter').catch(() => {});
+      }
+
+      // Wait for auth chrome to leave OR a clear error message to appear.
+      await page.waitForFunction(
+        () => {
+          const text = (document.body.innerText || '').toLowerCase();
+          return !/sign in|signing in|create account|log in|password|email/i.test(text);
+        },
+        { timeout: 8000 },
+      ).catch(() => {});
+
+      const stillOnAuth = await page.evaluate(() => /sign in|signing in|create account|log in|password/i.test(document.body.innerText || '')).catch(() => true);
+      if (!stillOnAuth) {
+        console.log(`[shots] ${intent} succeeded with ${creds.email}`);
+        // Persist storageState so subsequent script runs can skip the
+        // whole sign-in dance.
+        try {
+          await page.context().storageState({ path: AUTH_PATH });
+          console.log(`[shots] saved storageState → ${AUTH_PATH}`);
+        } catch { /* */ }
+        await page.waitForLoadState('networkidle', { timeout: TIMEOUT_MS }).catch(() => {});
+        await page.waitForTimeout(2000);
+        return 'bypassed';
+      }
+      // Still on auth screen → likely "user exists" (signup) or "wrong
+      // password" (signin). The next loop iteration switches intent.
+      console.warn(`[shots] ${intent} attempt did not bypass auth — trying ${intent === 'signup' ? 'signin' : 'signup'} next`);
+    } catch (e) {
+      console.warn(`[shots] ${intent} attempt threw: ${e.message?.slice(0, 80)}`);
+    }
+  }
+  return 'attempted';
+}
+
+/** Try every available auth-bypass strategy in order. */
+async function ensureAuthed(page) {
+  if (await bypassAuthIfPresent(page)) return true;
+  // Still here → no demo button. Last resort: create / sign in to a
+  // test account. Hard-path: fail-safely if no form.
+  const r = await tryCreateOrSignInTestAccount(page);
+  return r === 'bypassed';
+}
+
 // ── Per-screen navigation ─────────────────────────────────────────────────
 // The default strategy works for screens reachable via a More-tab tile
 // catalog: open the app, click 'More', then click a tile whose visible
@@ -159,7 +295,7 @@ async function bypassAuthIfPresent(page) {
 const CUSTOM_NAV = {
   HomeScreen: async (page) => {
     await page.goto(DEV_URL, { waitUntil: 'networkidle' });
-    await bypassAuthIfPresent(page);
+    await ensureAuthed(page);
     return true;
   },
   // AuthScreen is the login page itself — to see it we must clear the
@@ -188,7 +324,7 @@ async function navigateTo(page, screenName) {
   // Default: home → More tab → tile click.
   try {
     await page.goto(DEV_URL, { waitUntil: 'domcontentloaded', timeout: TIMEOUT_MS });
-    await bypassAuthIfPresent(page);
+    await ensureAuthed(page);
     // Look for a 'More' link/button. Many apps label it 'More' or have an icon button.
     const more = page.getByText(/^more$/i).first();
     if (await more.isVisible({ timeout: 2000 }).catch(() => false)) {

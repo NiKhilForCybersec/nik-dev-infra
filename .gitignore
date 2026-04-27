@@ -20,6 +20,7 @@ data/notebooks/
 data/wiki/
 data/snapshots/
 data/playwright-auth.json
+data/test-account.json
 data/captures/
 # self-concerns is regenerated; keep out of git
 data/self-concerns.md
