@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "verify:ws": "node scripts/verify-ws.mjs",
     "screenshots:login": "node scripts/screenshots-login.mjs",
-    "screenshots": "node scripts/take-screenshots.mjs"
+    "screenshots": "node scripts/take-screenshots.mjs",
+    "init": "node scripts/init.mjs"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",
