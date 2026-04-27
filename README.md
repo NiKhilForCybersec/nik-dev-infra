@@ -11,8 +11,10 @@ The product principle is **hard path, not happy path** — every agent must reac
 ## Quickstart
 
 ```bash
-cd ~/nik-dev-infra
+git clone https://github.com/NiKhilForCybersec/nik-dev-infra
+cd nik-dev-infra
 npm install
+npm run init -- --target ~/MyApp        # auto-detects stack + writes dev-infra.config.json
 npm start
 ```
 
@@ -20,6 +22,17 @@ npm start
 - UI:     `http://localhost:5174` (React + Vite, proxies API/WS)
 
 Open the UI, then edit any file under the watched repo. Findings appear in real time.
+
+### `npm run init` — stack-detecting setup wizard
+
+```bash
+npm run init                                       # interactive — prompts for target path
+npm run init -- --target ~/MyApp                   # detects + prompts for confirmation
+npm run init -- --target ~/MyApp --label MyApp -y  # detects + writes, no prompts
+npm run init -- --detect-only ~/MyApp              # dry-run, prints detected config only
+```
+
+Auto-detects: framework (Vite / Next / Remix / SvelteKit / Expo / RN), `screensGlob`, `contractsDir`, `manifestsGlob`, `migrationsGlob`, `backendDirs`, `frontendGlobs`, `screenshotsDir`, `concernsFile`, `resolutionsFile`, `claudeMdFile`. Walks workspace package locations (`web/`, `app/`, `apps/web/`, etc.) so monorepos work. Existing `writeback` / `riskGate` / `autoFixLoop` overrides are preserved on re-runs.
 
 ## Agents (28 shipped)
 
