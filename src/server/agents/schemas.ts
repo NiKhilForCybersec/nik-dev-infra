@@ -242,6 +242,17 @@ export const CodebaseGraphFindingSchema = Base.extend({
   ]),
 });
 
+export const IntentExtractorFindingSchema = Base.extend({
+  kind: z.enum([
+    'intent:extracted',
+    'intent:deferred',
+    'intent:malformed',
+    'intent:failed',
+    'intent:no-candidates',
+    'intent:summary',
+  ]),
+});
+
 export const ScreenProberFindingSchema = Base.extend({
   kind: z.enum([
     'screen-prober:run-complete',
@@ -363,6 +374,7 @@ export const SCHEMA_BY_AGENT = {
   'screen-validator': ScreenValidatorFindingSchema,
   'screen-prober': ScreenProberFindingSchema,
   'codebase-graph': CodebaseGraphFindingSchema,
+  'intent-extractor': IntentExtractorFindingSchema,
   'auto-fix-driver': AutoFixDriverFindingSchema,
   snapshotter: SnapshotterFindingSchema,
   curator: CuratorFindingSchema,

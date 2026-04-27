@@ -7,6 +7,7 @@ import { accessibilityAgent } from './accessibility.ts';
 import { aiCoverageAgent } from './ai-coverage.ts';
 import { autoFixDriverAgent } from './auto-fix-driver.ts';
 import { codebaseGraphAgent } from './codebase-graph.ts';
+import { intentExtractorAgent } from './intent-extractor.ts';
 import { bindingsAgent } from './bindings.ts';
 import { bootstrapAgent } from './bootstrap.ts';
 import { concernsAgent } from './concerns.ts';
@@ -39,6 +40,7 @@ export const ALL_AGENTS: Agent[] = [
   healthAgent,          // deterministic — pings external services
   graphAgent,           // deterministic — builds topology JSON
   codebaseGraphAgent,   // deterministic — Tree-sitter AST extraction (user-repo knowledge graph phase 1)
+  intentExtractorAgent, // claude -p — per-module intent summary (knowledge graph phase 2)
   llmCostAgent,         // deterministic — tails Supabase llm_calls table
   secretsAgent,         // deterministic — regex scan for committed secrets
   memoryKeeperAgent,    // deterministic — owner of the memory layer's integrity
@@ -87,6 +89,7 @@ export const RISK_CLASS_BY_AGENT: Record<string, RiskClass> = {
   registry:        'write-memory',
   graph:           'write-memory',
   'codebase-graph':'write-memory',
+  'intent-extractor':'write-memory',
   secrets:         'write-memory',
   'memory-keeper': 'write-memory',
   screenshots:     'write-user-repo',  // unlinkSync of PNGs in <repo>/docs/screenshots — gated by riskGate.allowWriteUserRepo

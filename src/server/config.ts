@@ -177,6 +177,10 @@ const DEFAULT_CONFIG: DevInfraConfig = {
       sync: 150, accessibility: 150, bindings: 200, 'ai-coverage': 150,
       bootstrap: 100, 'doc-ingest': 100, concerns: 100,
       'self-improve': 30, curator: 200,
+      // Intent-extractor caps at ~48 cycles/day (every 30 min) × 5
+      // modules each = ~240 LLM calls/day max. Plenty of room until
+      // the user opts into more frequent extraction.
+      'intent-extractor': 50,
     },
   },
   agentsToEnable: null,

@@ -305,6 +305,12 @@ const RULES: Record<string, Rule> = {
   'codebase-graph:summary':         rule_skip('internal — AST extraction digest'),
   'codebase-graph:no-source':       rule_skip('internal — no source to parse'),
   'codebase-graph:tree-sitter-missing': rule_skip('internal — native binding setup'),
+  'intent:extracted':               rule_skip('internal — knowledge graph enrichment'),
+  'intent:deferred':                rule_skip('internal — knowledge graph deferral'),
+  'intent:malformed':               rule_skip('internal — LLM output schema reject'),
+  'intent:failed':                  rule_skip('internal — LLM call failed'),
+  'intent:no-candidates':           rule_skip('internal — green-path knowledge graph'),
+  'intent:summary':                 rule_skip('internal — knowledge graph digest'),
   // Health: only health:down promotes (via rule_healthDownStable above);
   // up/degraded/summary stay on the dashboard, not in Concerns.md.
   'health:up':                  rule_skip('green status — not a concern'),
