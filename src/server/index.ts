@@ -374,6 +374,39 @@ app.post<{ Params: { id: string }; Body: { decision: 'approved' | 'rejected'; no
 // capture script either timed out before paint or hit an error state.
 // We surface `isBlank: true` so the UI can show a "re-run" hint instead
 // of a useless white image.
+// REST: live brain graph — direct view of register + facts from the
+// memory layer (NOT the graph agent's graph.json snapshot, which only
+// includes structural topology). This is what BRAIN renders so the
+// memory-side entities (concerns / notes / commits / file-activity /
+// agents / mcp tools) actually show up.
+//
+// Returns the same shape as /api/graph for drop-in replacement:
+//   { nodes: [{id, type, label, file?}], edges: [{from, to, kind}], builtAt }
+app.get('/api/memory/graph', async () => {
+  const nodes = query<{ urn: string; kind: string; label: string; file: string | null }>(
+    `SELECT urn, kind, label, file FROM register ORDER BY at DESC`,
+  );
+  const edges = query<{ subject: string; predicate: string; object: string }>(
+    `SELECT subject, predicate, object FROM facts ORDER BY at DESC LIMIT 5000`,
+  );
+  // Build a node-id set so we drop edges whose endpoints aren't
+  // visible (the orphan-object facts we found in the audit). The
+  // BRAIN doesn't render dangling edges.
+  const idSet = new Set(nodes.map((n) => n.urn));
+  return {
+    nodes: nodes.map((n) => ({
+      id: n.urn,
+      type: n.kind,
+      label: n.label,
+      ...(n.file ? { file: n.file } : {}),
+    })),
+    edges: edges
+      .filter((e) => idSet.has(e.subject) && idSet.has(e.object))
+      .map((e) => ({ from: e.subject, to: e.object, kind: e.predicate })),
+    builtAt: Date.now(),
+  };
+});
+
 // REST: derived status for every concern entity.
 // A concern is `open` by default. If a (resolution -> resolves -> concern)
 // fact exists, look up the curator's most recent audit verdict for

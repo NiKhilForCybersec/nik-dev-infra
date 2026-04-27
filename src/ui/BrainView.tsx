@@ -188,10 +188,12 @@ export function BrainView({ onClose }: { onClose: () => void }) {
     let cancelled = false;
     const load = async () => {
       try {
-        const r = await fetch('/api/graph');
+        // Direct view of register + facts (NOT the graph agent's
+        // structural graph.json) so memory entities — concerns, notes,
+        // commits, file-activity, agents, mcp tools — actually show up.
+        const r = await fetch('/api/memory/graph');
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const raw = (await r.json()) as unknown;
-        const g: Graph = typeof raw === 'string' ? JSON.parse(raw) : (raw as Graph);
+        const g = (await r.json()) as Graph;
         if (!cancelled) setGraph(g);
       } catch (e) { if (!cancelled) setError((e as Error).message); }
     };
