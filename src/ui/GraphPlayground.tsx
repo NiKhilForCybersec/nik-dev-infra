@@ -255,6 +255,20 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
         setHover({ id, x: pos.x, y: pos.y });
       });
       cyInstance.current.on('mouseout', 'node', () => setHover(null));
+      // Persist drag — when the user moves a node, save the new position
+      // so it sticks across reloads. Debounced via dragfree (fires once
+      // when the mouse releases, not for every pixel of drag).
+      cyInstance.current.on('dragfree', 'node', () => {
+        if (!cyInstance.current) return;
+        try {
+          const snapshot: Record<string, { x: number; y: number }> = {};
+          cyInstance.current.nodes().forEach((n) => {
+            const p = n.position();
+            snapshot[n.id() as string] = { x: p.x, y: p.y };
+          });
+          localStorage.setItem('dev-infra:graph-positions', JSON.stringify(snapshot));
+        } catch { /* */ }
+      });
       // Keep the tooltip glued to the node when the user pans / zooms.
       cyInstance.current.on('pan zoom', () => {
         setHover((prev) => {
@@ -269,7 +283,30 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
     const cy = cyInstance.current;
     cy.elements().remove();
     cy.add(elements);
-    cy.layout({
+
+    // Sticky positions across reloads — load saved positions per node id;
+    // if ≥80% of currently-visible nodes have a saved position, use the
+    // 'preset' layout (instant, preserves the user's mental map). Otherwise
+    // fall back to fcose so newly-added nodes get sensible coordinates.
+    let usedPreset = false;
+    try {
+      const raw = localStorage.getItem('dev-infra:graph-positions');
+      if (raw) {
+        const saved = JSON.parse(raw) as Record<string, { x: number; y: number }>;
+        let withPos = 0;
+        cy.nodes().forEach((n) => {
+          const p = saved[n.id() as string];
+          if (p) { n.position(p); withPos++; }
+        });
+        if (cy.nodes().length > 0 && withPos / cy.nodes().length >= 0.8) {
+          cy.layout({ name: 'preset', animate: false } as any).run();
+          cy.fit(undefined, 40);
+          usedPreset = true;
+        }
+      }
+    } catch { /* */ }
+
+    if (!usedPreset) cy.layout({
       name: 'fcose',
       animate: false,
       randomize: true,
@@ -289,7 +326,20 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
       tilingPaddingHorizontal: 20,
       numIter: 3500,
     } as any).run();
-    cy.fit(undefined, 40);
+    if (!usedPreset) cy.fit(undefined, 40);
+
+    // Persist positions after either layout settles. Fcose with
+    // animate:false is synchronous, preset is too — positions are final
+    // immediately. Snapshot every visible node so future reloads land on
+    // the same map.
+    try {
+      const snapshot: Record<string, { x: number; y: number }> = {};
+      cy.nodes().forEach((n) => {
+        const p = n.position();
+        snapshot[n.id() as string] = { x: p.x, y: p.y };
+      });
+      localStorage.setItem('dev-infra:graph-positions', JSON.stringify(snapshot));
+    } catch { /* localStorage may be full or disabled */ }
   }, [elements, entities, findings]);
 
   // Keep the cytoscape instance through unmount.
@@ -408,6 +458,24 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
               >● {s === 'error' ? 'err' : s === 'unknown' ? 'unknown' : s} {n}</button>
             );
           })}
+          <button
+            onClick={() => {
+              try { localStorage.removeItem('dev-infra:graph-positions'); } catch { /* */ }
+              if (cyInstance.current) {
+                cyInstance.current.layout({
+                  name: 'fcose', animate: false, randomize: true,
+                  nodeRepulsion: 12000, idealEdgeLength: 130, edgeElasticity: 0.45,
+                  nodeSeparation: 90, gravity: 0.18, gravityRangeCompound: 1.5,
+                  componentSpacing: 120, tile: true,
+                  tilingPaddingVertical: 20, tilingPaddingHorizontal: 20, numIter: 3500,
+                } as any).run();
+                cyInstance.current.fit(undefined, 40);
+              }
+            }}
+            title="discard saved positions and re-layout from scratch"
+            className="mono"
+            style={{ padding: '4px 8px', fontSize: 10, color: 'var(--fg-3)' }}
+          >RESET LAYOUT</button>
           <button onClick={onClose} className="mono" style={{ padding: '4px 10px', fontSize: 12 }}>×</button>
         </div>
       </div>
