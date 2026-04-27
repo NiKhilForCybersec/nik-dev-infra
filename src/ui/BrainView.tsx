@@ -1,29 +1,35 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import ForceGraph3D, { type ForceGraphMethods } from 'react-force-graph-3d';
-import * as THREE from 'three';
+import ForceGraph2D, { type ForceGraphMethods } from 'react-force-graph-2d';
 
-/* BRAIN — 3D animated live memory.
+/* BRAIN — 2D Canvas live memory.
  *
- * Renders the register entities + facts as a force-directed brain.
- * Subscribes to the daemon WebSocket so any new finding pulses the
- * affected node briefly (the brain "lights up" as agents work).
- * Click any node → camera flies to it + side drawer with details.
+ * Switched from react-force-graph-3d to 2D after the 3D version felt
+ * unsteerable (jittery mouse wheel, camera occlusion, depth confusion).
+ * Obsidian's graph is 2D for the same reasons. This version uses
+ * Canvas/WebGL via react-force-graph-2d:
+ *   - Mouse wheel zooms smoothly (no axis confusion)
+ *   - Drag pans the canvas, drag-on-node moves the node
+ *   - Hover a node → connected subgraph stays bright, rest dims
+ *     (Obsidian-style focus mode)
+ *   - Click a node → side drawer with intent + related memory
  *
- * Continuously updating: every 20s the graph reloads to pick up
- * newly-added nodes/edges. Live pulses come from WS in real time.
+ * Live: WebSocket pulse on every finding that names a node (file or
+ * label match). 20s background refresh of /api/memory/graph.
+ *
+ * Scopes:
+ *   MEMORY  (default) — concerns / notes / commits / wiki / activity /
+ *           agents / mcp tools / their virtual file:/scope:/section:/
+ *           author:/tag:/table: endpoints. 96-ish nodes on a populated
+ *           dev-infra; reads as a coherent brain.
+ *   ALL    — overlay project topology (modules / functions / screens /
+ *           ops / etc.) — same data PLAYGROUND shows in 2D Cytoscape.
+ *
+ * Confidence floor: a `100%` toggle drops anything below 1.0 (heuristic
+ * resolution↔concern links + per-severity weighted concern entities).
  */
 
-type NodeKind =
-  | 'screen' | 'op' | 'cmd' | 'endpoint' | 'llm_provider'
-  | 'mcp_server' | 'mcp_tool' | 'table' | 'component'
-  | 'module' | 'function' | 'class' | 'package'
-  | 'concern' | 'resolution' | 'commit' | 'file-activity'
-  | 'note' | 'self' | 'test-suite' | 'agent';
-
-type EdgeKind = string;
-
-type RawNode = { id: string; type: NodeKind; label: string; file?: string };
-type RawEdge = { from: string; to: string; kind: EdgeKind };
+type RawNode = { id: string; type: string; label: string; file?: string };
+type RawEdge = { from: string; to: string; kind: string };
 type Graph = { nodes: RawNode[]; edges: RawEdge[]; builtAt: number };
 
 type Severity = 'info' | 'warn' | 'error';
@@ -38,7 +44,7 @@ type ServerEvent =
   | { type: 'snapshot'; findings: Finding[] };
 
 const NODE_COLOR: Record<string, string> = {
-  // Pseudo-kinds (virtual endpoints; same colour family as the real ones)
+  // Pseudo-kinds (virtual endpoints)
   file:          '#7a7a8c',
   scope:         '#a4c4ff',
   section:       '#ffd166',
@@ -68,132 +74,47 @@ const NODE_COLOR: Record<string, string> = {
   agent:         '#c389ff',
 };
 
-// MEMORY kinds — what BRAIN shows by default. The "second brain" view
-// is about what dev-infra REMEMBERS (concerns / resolutions / notes /
-// commits / file activity / its own self-model), PLUS the pseudo-URN
-// targets they connect to (file: / scope: / section: / author: / tag: /
-// table:) so the brain has structure instead of floating dots.
-// Topology kinds (module / function / screen / op / etc.) stay in the
-// PLAYGROUND (2D Cytoscape).
 const MEMORY_KINDS = new Set([
   'concern', 'resolution', 'note', 'commit', 'file-activity',
   'self', 'agent', 'mcp_server', 'mcp_tool',
-  // Virtual / pseudo-URN endpoints — emitted by /api/memory/graph so
-  // memory entities have something to connect to.
   'file', 'scope', 'section', 'author', 'tag', 'table',
 ]);
-
-// Which fact predicates make sense for the memory subgraph (vs. the
-// structural ones like imports / exported_by / renders). When showing
-// memory-only, hide structural edges so the brain feels coherent.
-const MEMORY_PREDICATES = new Set([
-  'targets', 'raised_in', 'resolves', 'modified', 'authored_by',
-  'note_in_scope', 'tagged', 'has_agent', 'has_screenshot',
-]);
-
-const EDGE_COLOR: Record<string, string> = {
-  imports:        'rgba(98, 181, 255, 0.4)',
-  imports_dynamic:'rgba(98, 181, 255, 0.25)',
-  depends_on:     'rgba(255, 184, 107, 0.4)',
-  exported_by:    'rgba(126, 182, 163, 0.5)',
-  reads:          'rgba(98, 181, 255, 0.4)',
-  writes:         'rgba(255, 184, 107, 0.4)',
-  dispatches:     'rgba(195, 137, 255, 0.4)',
-  navigates_to:   'rgba(95, 212, 154, 0.5)',
-  calls:          'rgba(195, 137, 255, 0.4)',
-  invokes_llm:    'rgba(255, 155, 210, 0.5)',
-  tool_of:        'rgba(255, 224, 102, 0.5)',
-  persists_to:    'rgba(95, 212, 154, 0.4)',
-  renders:        'rgba(164, 196, 255, 0.4)',
-  emits_kind:     'rgba(255, 209, 102, 0.4)',
-  has_screenshot: 'rgba(98, 181, 255, 0.3)',
-  raised_in:      'rgba(255, 107, 107, 0.5)',
-  targets:        'rgba(255, 107, 107, 0.5)',
-  resolves:       'rgba(95, 212, 154, 0.6)',
-  modified:       'rgba(255, 209, 102, 0.4)',
-  authored_by:    'rgba(164, 196, 255, 0.3)',
-  has_agent:      'rgba(195, 137, 255, 0.3)',
-  default:        'rgba(120, 120, 140, 0.25)',
-};
-
-// Build a small text sprite for an always-on node label. Uses a
-// canvas texture so the label stays readable regardless of camera
-// distance (vs ForceGraph3D's built-in nodeLabel which is hover-only).
-function makeLabelSprite(text: string): THREE.Sprite {
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d')!;
-  const fontPx = 28;
-  ctx.font = `${fontPx}px JetBrains Mono, monospace`;
-  const padding = 6;
-  const w = Math.max(40, ctx.measureText(text).width + padding * 2);
-  const h = fontPx + padding * 2;
-  canvas.width = Math.ceil(w);
-  canvas.height = Math.ceil(h);
-  // Re-set context font after canvas resize (resize clears state).
-  ctx.font = `${fontPx}px JetBrains Mono, monospace`;
-  ctx.fillStyle = 'rgba(10, 10, 14, 0.85)';
-  ctx.fillRect(0, 0, w, h);
-  ctx.fillStyle = '#e8e8ec';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, padding, h / 2);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.minFilter = THREE.LinearFilter;
-  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
-  const sprite = new THREE.Sprite(mat);
-  // World units: 0.2 units per canvas pixel keeps labels readable at
-  // typical zoom levels for a settled brain.
-  sprite.scale.set(w * 0.2, h * 0.2, 1);
-  return sprite;
-}
-
-// Blend a hex colour toward the dark canvas background so resolved
-// nodes recede visually without disappearing entirely. factor=1 means
-// untouched colour; factor=0 means full background dark.
-function mixWithBg(hex: string, factor: number): string {
-  const m = hex.replace('#', '').match(/^(..)(..)(..)$/);
-  if (!m) return hex;
-  const [r, g, b] = [parseInt(m[1]!, 16), parseInt(m[2]!, 16), parseInt(m[3]!, 16)];
-  const bg = 14;       // matches #0a0a0e
-  const blend = (c: number) => Math.round(bg + (c - bg) * factor);
-  const hex2 = (n: number) => n.toString(16).padStart(2, '0');
-  return `#${hex2(blend(r))}${hex2(blend(g))}${hex2(blend(b))}`;
-}
 
 type Pulse = { nodeId: string; until: number; intensity: number };
 
 type GraphNode = {
   id: string;
   label: string;
-  type: NodeKind;
+  type: string;
   file?: string;
-  // Internal state for rendering
   baseColor: string;
   size: number;
+  x?: number;
+  y?: number;
 };
 
-type GraphLink = { source: string; target: string; kind: EdgeKind; color: string };
+type GraphLink = { source: string; target: string; kind: string };
+
+function ago(ts: number): string {
+  const d = Math.round((Date.now() - ts) / 1000);
+  if (d < 60) return `${d}s ago`;
+  if (d < 3600) return `${Math.round(d / 60)}m ago`;
+  if (d < 86_400) return `${Math.round(d / 3600)}h ago`;
+  return `${Math.round(d / 86_400)}d ago`;
+}
 
 export function BrainView({ onClose }: { onClose: () => void }) {
   const [graph, setGraph] = useState<Graph | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<GraphNode | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
-  // Default mode: MEMORY ONLY. Toggle to ALL to overlay the project
-  // topology (which is what PLAYGROUND already renders in 2D).
   const [scope, setScope] = useState<'memory' | 'all'>('memory');
   const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(new Set());
   const [pulses, setPulses] = useState<Pulse[]>([]);
   const [liveCount, setLiveCount] = useState(0);
-  // Quality controls for the 3D layout
-  const [frozen, setFrozen] = useState(false);
   const [showLabels, setShowLabels] = useState(false);
-  // Confidence floor — when on, hide everything below 1.0 (heuristic
-  // matches like resolution→concern fingerprint links + per-severity
-  // concern-confidence weights).
   const [confidentOnly, setConfidentOnly] = useState(false);
-  // Concern status (open / claimed-resolved / resolved / regressed) →
-  // dim resolved concerns so the live brain emphasizes what's
-  // CURRENTLY a problem, not historical noise.
   const [concernStatus, setConcernStatus] = useState<Record<string, { status: string }>>({});
   const fgRef = useRef<ForceGraphMethods | undefined>(undefined);
   const wsRef = useRef<WebSocket | null>(null);
@@ -205,9 +126,6 @@ export function BrainView({ onClose }: { onClose: () => void }) {
     let cancelled = false;
     const load = async () => {
       try {
-        // Direct view of register + facts (NOT the graph agent's
-        // structural graph.json) so memory entities — concerns, notes,
-        // commits, file-activity, agents, mcp tools — actually show up.
         const url = confidentOnly ? '/api/memory/graph?minConfidence=1.0' : '/api/memory/graph';
         const r = await fetch(url);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -259,8 +177,6 @@ export function BrainView({ onClose }: { onClose: () => void }) {
         try {
           const msg = JSON.parse(e.data) as ServerEvent;
           if (msg.type !== 'finding' || !graph) return;
-          // Find the node this finding pertains to: file match first,
-          // then summary substring against any node label/id.
           const f = msg.finding;
           const matchingIds: string[] = [];
           for (const n of graph.nodes) {
@@ -269,7 +185,7 @@ export function BrainView({ onClose }: { onClose: () => void }) {
           }
           if (matchingIds.length === 0) return;
           const intensity = f.severity === 'error' ? 1.0 : f.severity === 'warn' ? 0.7 : 0.4;
-          const until = Date.now() + 2_500;       // 2.5s pulse
+          const until = Date.now() + 2_500;
           setPulses((prev) => [
             ...prev.filter((p) => p.until > Date.now()),
             ...matchingIds.slice(0, 5).map((id) => ({ nodeId: id, until, intensity })),
@@ -283,20 +199,40 @@ export function BrainView({ onClose }: { onClose: () => void }) {
     return () => { alive = false; wsRef.current?.close(); };
   }, [graph]);
 
-  // Garbage-collect expired pulses every 500ms so dead entries don't
-  // pile up. Cheap.
+  // Pulse GC every 250ms so dead entries don't pile up + frame stays smooth.
   useEffect(() => {
     const id = setInterval(() => {
-      setPulses((prev) => {
-        const now = Date.now();
-        return prev.filter((p) => p.until > now);
-      });
-    }, 500);
+      setPulses((prev) => prev.filter((p) => p.until > Date.now()));
+    }, 250);
     return () => clearInterval(id);
   }, []);
 
-  // Build the data shape react-force-graph-3d wants. Filter by hidden
-  // kinds + search query. Edges only kept when both endpoints visible.
+  // Ambient pulse — every ~4s, pick a random visible node and pulse it
+  // briefly. Makes the brain feel ALIVE even when no real findings are
+  // arriving. Subtle (intensity 0.3) so it reads as background activity,
+  // not noise.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (data.nodes.length === 0) return;
+      const node = data.nodes[Math.floor(Math.random() * data.nodes.length)]!;
+      setPulses((prev) => [...prev, { nodeId: node.id, until: Date.now() + 1500, intensity: 0.3 }]);
+    }, 4_000);
+    return () => clearInterval(id);
+  }, [data.nodes.length]);
+
+  // Reheat the simulation periodically so it never fully settles —
+  // gives the layout a gentle continuous drift like Obsidian. Without
+  // this it crystallizes after the cooldown and feels static.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (fgRef.current && (fgRef.current as any).d3ReheatSimulation) {
+        (fgRef.current as any).d3ReheatSimulation(0.05);
+      }
+    }, 8_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Build the graph data. Filter by scope + search + hidden kinds.
   const data = useMemo(() => {
     if (!graph) return { nodes: [] as GraphNode[], links: [] as GraphLink[] };
     const q = filter.trim().toLowerCase();
@@ -307,7 +243,6 @@ export function BrainView({ onClose }: { onClose: () => void }) {
       (!q || n.label.toLowerCase().includes(q) || n.id.toLowerCase().includes(q));
     const visibleIds = new Set(graph.nodes.filter(visible).map((n) => n.id));
 
-    // Per-node degree for size scaling.
     const deg = new Map<string, number>();
     for (const e of graph.edges) {
       if (!visibleIds.has(e.from) || !visibleIds.has(e.to)) continue;
@@ -319,10 +254,6 @@ export function BrainView({ onClose }: { onClose: () => void }) {
       .filter(visible)
       .map((n) => {
         const status = concernStatus[n.id]?.status;
-        // Dim resolved concerns so the live brain emphasizes
-        // what's CURRENTLY a problem, not historical noise.
-        // claimed-resolved (no curator audit yet) stays half-bright.
-        // regressed stays at full brightness (it's actively wrong).
         const dimFactor =
           status === 'resolved' ? 0.25
           : status === 'claimed-resolved' ? 0.55
@@ -341,21 +272,33 @@ export function BrainView({ onClose }: { onClose: () => void }) {
         };
       });
 
-    const linkInScope = (k: string) => scope === 'all' || MEMORY_PREDICATES.has(k);
     const links: GraphLink[] = graph.edges
-      .filter((e) => visibleIds.has(e.from) && visibleIds.has(e.to) && linkInScope(e.kind))
-      .map((e) => ({
-        source: e.from,
-        target: e.to,
-        kind: e.kind,
-        color: EDGE_COLOR[e.kind] ?? EDGE_COLOR.default!,
-      }));
+      .filter((e) => visibleIds.has(e.from) && visibleIds.has(e.to))
+      .map((e) => ({ source: e.from, target: e.to, kind: e.kind }));
 
     return { nodes, links };
   }, [graph, filter, hiddenKinds, concernStatus, scope]);
 
-  // Per-kind counts for the legend / filter — restricted to the
-  // current scope, so MEMORY mode never shows op/module/screen chips.
+  // Adjacency map for hover-highlight (Obsidian style: focus the
+  // hovered node + its 1-hop neighbourhood, dim everything else).
+  const adjacency = useMemo(() => {
+    const m = new Map<string, Set<string>>();
+    for (const l of data.links) {
+      const s = typeof l.source === 'object' ? (l.source as any).id : l.source;
+      const t = typeof l.target === 'object' ? (l.target as any).id : l.target;
+      if (!m.has(s)) m.set(s, new Set());
+      if (!m.has(t)) m.set(t, new Set());
+      m.get(s)!.add(t);
+      m.get(t)!.add(s);
+    }
+    return m;
+  }, [data.links]);
+
+  const isFocused = (nodeId: string) =>
+    !hoveredId || hoveredId === nodeId || (adjacency.get(hoveredId)?.has(nodeId) ?? false);
+
+  // Per-kind counts for the legend (filtered by scope so MEMORY mode
+  // only shows memory kind chips).
   const kindCounts = useMemo(() => {
     const m = new Map<string, number>();
     if (!graph) return m;
@@ -366,49 +309,65 @@ export function BrainView({ onClose }: { onClose: () => void }) {
     return m;
   }, [graph, scope]);
 
-  // Click → fly camera to node + open drawer.
   const onNodeClick = (node: GraphNode) => {
     setSelected(node);
-    if (!fgRef.current) return;
-    const distance = 80;
-    const n: any = node;
-    if (typeof n.x !== 'number') return;
-    const distRatio = 1 + distance / Math.hypot(n.x, n.y, n.z);
-    fgRef.current.cameraPosition(
-      { x: n.x * distRatio, y: n.y * distRatio, z: n.z * distRatio },
-      { x: n.x, y: n.y, z: n.z },
-      1500,
-    );
+    if (!fgRef.current || node.x == null || node.y == null) return;
+    fgRef.current.centerAt(node.x, node.y, 800);
+    fgRef.current.zoom(2.5, 800);
   };
 
-  // Three.js node rendering — sphere + optional pulse halo + optional
-  // always-on label sprite.
-  const nodeThreeObject = (node: GraphNode, withLabel: boolean) => {
-    const n = node;
-    const pulse = pulses.find((p) => p.nodeId === n.id);
-    const group = new THREE.Group();
-    const sphere = new THREE.Mesh(
-      new THREE.SphereGeometry(n.size, 16, 12),
-      new THREE.MeshLambertMaterial({
-        color: n.baseColor,
-        emissive: pulse ? new THREE.Color(n.baseColor).multiplyScalar(pulse.intensity) : new THREE.Color(0x000000),
-        emissiveIntensity: pulse ? 1.0 : 0,
-      }),
-    );
-    group.add(sphere);
+  // Custom canvas node renderer — circle + optional pulse halo +
+  // optional always-on label. Hover-dim non-focused nodes.
+  const drawNode = (node: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
+    if (node.x == null || node.y == null) return;
+    const focused = isFocused(node.id);
+    const pulse = pulses.find((p) => p.nodeId === node.id);
+
+    // Pulse halo first so it sits behind the sphere.
     if (pulse) {
-      const halo = new THREE.Mesh(
-        new THREE.SphereGeometry(n.size * 1.8, 16, 12),
-        new THREE.MeshBasicMaterial({ color: n.baseColor, transparent: true, opacity: 0.25 * pulse.intensity, depthWrite: false }),
-      );
-      group.add(halo);
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, node.size * 2.2, 0, 2 * Math.PI);
+      ctx.fillStyle = node.baseColor;
+      ctx.globalAlpha = 0.18 * pulse.intensity;
+      ctx.fill();
+      ctx.globalAlpha = 1;
     }
-    if (withLabel) {
-      const sprite = makeLabelSprite(n.label.slice(0, 28));
-      sprite.position.set(0, n.size + 4, 0);
-      group.add(sprite);
+
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, node.size, 0, 2 * Math.PI);
+    ctx.fillStyle = node.baseColor;
+    ctx.globalAlpha = focused ? 1 : 0.18;
+    ctx.fill();
+    if (selected?.id === node.id) {
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2 / globalScale;
+      ctx.stroke();
     }
-    return group;
+    ctx.globalAlpha = 1;
+
+    // Label: always-on when toggle is set + zoomed in enough, OR when
+    // hovered, OR when selected.
+    const showThisLabel = (showLabels && globalScale > 0.6) || hoveredId === node.id || selected?.id === node.id;
+    if (showThisLabel && focused) {
+      const fontSize = Math.max(8, 12 / globalScale);
+      ctx.font = `${fontSize}px JetBrains Mono, monospace`;
+      const text = node.label.slice(0, 28);
+      const w = ctx.measureText(text).width;
+      const padding = 3 / globalScale;
+      ctx.fillStyle = 'rgba(10, 10, 14, 0.85)';
+      ctx.fillRect(node.x - w / 2 - padding, node.y + node.size + 2, w + padding * 2, fontSize + padding * 2);
+      ctx.fillStyle = '#e8e8ec';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(text, node.x, node.y + node.size + 2 + padding);
+    }
+  };
+
+  const linkColor = (link: GraphLink) => {
+    const sId = typeof link.source === 'object' ? (link.source as any).id : link.source;
+    const tId = typeof link.target === 'object' ? (link.target as any).id : link.target;
+    const focused = isFocused(sId) && isFocused(tId);
+    return focused ? 'rgba(180, 180, 200, 0.45)' : 'rgba(120, 120, 140, 0.08)';
   };
 
   return (
@@ -419,7 +378,7 @@ export function BrainView({ onClose }: { onClose: () => void }) {
       {/* Header */}
       <div style={{ padding: '12px 18px', borderBottom: '1px solid var(--hairline)', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
         <div>
-          <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: 1.5 }}>BRAIN · LIVE 3D MEMORY</div>
+          <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: 1.5 }}>BRAIN · LIVE 2D MEMORY</div>
           <div style={{ fontSize: 16, fontWeight: 600 }}>
             {graph ? `${data.nodes.length} nodes · ${data.links.length} edges${liveCount > 0 ? ` · ${liveCount} pulse${liveCount === 1 ? '' : 's'}` : ''}` : (error ? `error: ${error}` : 'loading…')}
           </div>
@@ -431,14 +390,13 @@ export function BrainView({ onClose }: { onClose: () => void }) {
           className="mono"
           style={{ minWidth: 200, padding: '4px 8px', fontSize: 12 }}
         />
-        {/* Scope toggle: MEMORY (default) vs ALL (overlay topology) */}
         <div style={{ display: 'flex', gap: 4 }}>
           {(['memory', 'all'] as const).map((s) => (
             <button
               key={s}
               onClick={() => setScope(s)}
               className="mono"
-              title={s === 'memory' ? 'concerns / resolutions / notes / commits / activity / agents — what dev-infra REMEMBERS' : 'overlay the project topology too (modules / functions / screens / etc.) — same data PLAYGROUND shows in 2D'}
+              title={s === 'memory' ? 'concerns / resolutions / notes / commits / activity / agents — what dev-infra REMEMBERS' : 'overlay the project topology too — same data PLAYGROUND shows'}
               style={{
                 padding: '3px 8px', fontSize: 10,
                 background: scope === s ? 'var(--accent-soft)' : 'transparent',
@@ -448,7 +406,6 @@ export function BrainView({ onClose }: { onClose: () => void }) {
             >{s === 'memory' ? 'MEMORY' : 'ALL'}</button>
           ))}
         </div>
-        {/* Quality controls */}
         <button
           onClick={() => setShowLabels((v) => !v)}
           className="mono"
@@ -461,20 +418,9 @@ export function BrainView({ onClose }: { onClose: () => void }) {
           }}
         >LABELS</button>
         <button
-          onClick={() => setFrozen((v) => !v)}
-          className="mono"
-          title={frozen ? 'resume physics' : 'freeze layout — stop the bouncing'}
-          style={{
-            padding: '3px 8px', fontSize: 10,
-            background: frozen ? 'var(--warn)' + '22' : 'transparent',
-            borderColor: frozen ? 'var(--warn)' : 'var(--hairline)',
-            color: frozen ? 'var(--warn)' : 'var(--fg-2)',
-          }}
-        >{frozen ? 'FROZEN' : 'FREEZE'}</button>
-        <button
           onClick={() => setConfidentOnly((v) => !v)}
           className="mono"
-          title={confidentOnly ? 'show all (heuristic links + medium-confidence entries included)' : 'show only memory at 100% confidence (drops heuristic resolution↔concern links + medium-severity weighted entries)'}
+          title={confidentOnly ? 'show all (heuristic links + medium-confidence entries included)' : 'show only memory at 100% confidence'}
           style={{
             padding: '3px 8px', fontSize: 10,
             background: confidentOnly ? 'var(--accent-soft)' : 'transparent',
@@ -483,7 +429,7 @@ export function BrainView({ onClose }: { onClose: () => void }) {
           }}
         >100%</button>
         <button
-          onClick={() => fgRef.current?.zoomToFit(800, 60)}
+          onClick={() => fgRef.current?.zoomToFit(600, 60)}
           className="mono"
           title="fit all visible nodes in view"
           style={{ padding: '3px 8px', fontSize: 10, color: 'var(--fg-2)' }}
@@ -521,54 +467,78 @@ export function BrainView({ onClose }: { onClose: () => void }) {
 
       {/* Canvas + drawer */}
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-        <div ref={containerRef} style={{ flex: 1, position: 'relative', minHeight: 300 }}>
+        <div ref={containerRef} style={{ flex: 1, position: 'relative', minHeight: 300, background: '#0a0a0e' }}>
           {graph && data.nodes.length === 0 && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', zIndex: 1 }}>
               <div className="glass" style={{ padding: 24, maxWidth: 480, textAlign: 'center', pointerEvents: 'auto' }}>
                 <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: 1.5, marginBottom: 8 }}>EMPTY BRAIN</div>
                 <div style={{ fontSize: 13, color: 'var(--fg)', lineHeight: 1.5 }}>
                   {scope === 'memory'
-                    ? <>No memory entities match the current filters. Try clicking <b>ALL</b> above to overlay project topology, or drop a note from the <b>MEMORY</b> tab to grow the brain.</>
-                    : <>No nodes match the current filters. Clear the search box or re-enable kind chips below.</>}
+                    ? <>No memory entities match the current filters. Try clicking <b>ALL</b> above to overlay project topology.</>
+                    : <>No nodes match the current filters. Clear the search or re-enable kind chips.</>}
                 </div>
               </div>
             </div>
           )}
           {graph && (
-            <ForceGraph3D
+            <ForceGraph2D
               ref={fgRef as any}
               width={containerSize.w}
               height={containerSize.h}
               graphData={data}
-              nodeLabel={(n: any) => `${n.type}: ${n.label}`}
-              nodeThreeObject={(n: any) => nodeThreeObject(n, showLabels)}
-              linkColor={(l: any) => l.color}
-              linkOpacity={0.45}
-              linkWidth={0.6}
-              linkDirectionalParticles={(l: any) => {
-                // Highlight pulsed edges with travelling particles for 2.5s.
-                const sourceId = typeof l.source === 'object' ? l.source.id : l.source;
-                const targetId = typeof l.target === 'object' ? l.target.id : l.target;
-                return pulses.some((p) => p.nodeId === sourceId || p.nodeId === targetId) ? 2 : 0;
-              }}
-              linkDirectionalParticleSpeed={0.01}
               backgroundColor="#0a0a0e"
-              onNodeClick={onNodeClick as any}
-              onBackgroundClick={() => setSelected(null)}
-              // Quality tuning: a settled small graph (memory-only) reaches
-              // its layout in ~6 seconds. Frozen mode = 0 ticks, no
-              // simulation; just render the last positions.
-              cooldownTicks={frozen ? 0 : 300}
-              cooldownTime={frozen ? 0 : 8000}
-              warmupTicks={frozen ? 0 : 60}
-              d3AlphaDecay={0.04}
-              d3VelocityDecay={0.55}
-              enableNodeDrag={!frozen}
-              onEngineStop={() => {
-                // After settling, fit-to-view once so the user lands on a
-                // composed brain instead of a corner of empty space.
-                if (fgRef.current && !frozen) fgRef.current.zoomToFit(600, 60);
+              nodeRelSize={1}
+              nodeCanvasObject={(n: any, ctx: any, scale: any) => drawNode(n as GraphNode, ctx, scale)}
+              nodePointerAreaPaint={(n: any, color: any, ctx: any) => {
+                const node = n as GraphNode;
+                if (node.x == null || node.y == null) return;
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, node.size + 2, 0, 2 * Math.PI);
+                ctx.fillStyle = color;
+                ctx.fill();
               }}
+              linkColor={linkColor as any}
+              linkWidth={(l: any) => {
+                const sId = typeof l.source === 'object' ? l.source.id : l.source;
+                const tId = typeof l.target === 'object' ? l.target.id : l.target;
+                return isFocused(sId) && isFocused(tId) ? 1.0 : 0.3;
+              }}
+              linkDirectionalParticles={(l: any) => {
+                // Always-on subtle particles on the busy edges so the
+                // brain reads as data-in-motion, not a static lattice.
+                // Plus the pulse particles on event-affected edges.
+                const sId = typeof l.source === 'object' ? l.source.id : l.source;
+                const tId = typeof l.target === 'object' ? l.target.id : l.target;
+                const pulsing = pulses.some((p) => p.nodeId === sId || p.nodeId === tId);
+                if (pulsing) return 3;
+                // Hash the source-id to deterministically pick ~10% of
+                // links to carry an ambient particle. Stable so the same
+                // edges always glow (pattern, not chaos).
+                const hash = (sId + tId).split('').reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 0);
+                return Math.abs(hash) % 10 === 0 ? 1 : 0;
+              }}
+              linkDirectionalParticleSpeed={(l: any) => {
+                const sId = typeof l.source === 'object' ? l.source.id : l.source;
+                const tId = typeof l.target === 'object' ? l.target.id : l.target;
+                return pulses.some((p) => p.nodeId === sId || p.nodeId === tId) ? 0.012 : 0.003;
+              }}
+              linkDirectionalParticleColor={() => 'rgba(232, 232, 236, 0.7)'}
+              linkDirectionalParticleWidth={1.5}
+              onNodeHover={(n: any) => setHoveredId(n ? (n as GraphNode).id : null)}
+              onNodeClick={onNodeClick as any}
+              onBackgroundClick={() => { setSelected(null); setHoveredId(null); }}
+              // Never fully settle — Obsidian-style ambient drift. The
+              // ambient-pulse + 8s reheat effects keep the simulation
+              // alive at low alpha so nodes breathe gently.
+              cooldownTicks={Infinity}
+              cooldownTime={Infinity}
+              warmupTicks={80}
+              d3AlphaDecay={0.008}
+              d3VelocityDecay={0.4}
+              minZoom={0.15}
+              maxZoom={8}
+              enableZoomInteraction={true}
+              enablePanInteraction={true}
             />
           )}
         </div>
@@ -592,9 +562,16 @@ export function BrainView({ onClose }: { onClose: () => void }) {
   );
 }
 
-/* Per-node deep-detail loaded lazily from /api/memory/feed (filtered to
- * the node) + /api/code-intents (when the node is a module). Keeps the
- * brain's main render path lean. */
+function mixWithBg(hex: string, factor: number): string {
+  const m = hex.replace('#', '').match(/^(..)(..)(..)$/);
+  if (!m) return hex;
+  const [r, g, b] = [parseInt(m[1]!, 16), parseInt(m[2]!, 16), parseInt(m[3]!, 16)];
+  const bg = 14;
+  const blend = (c: number) => Math.round(bg + (c - bg) * factor);
+  const hex2 = (n: number) => n.toString(16).padStart(2, '0');
+  return `#${hex2(blend(r))}${hex2(blend(g))}${hex2(blend(b))}`;
+}
+
 function NodeDetail({ urn }: { urn: string }) {
   const [intent, setIntent] = useState<string | null>(null);
   const [findings, setFindings] = useState<Array<{ kind: string; severity: string; summary: string; at_iso: string }>>([]);
@@ -611,7 +588,6 @@ function NodeDetail({ urn }: { urn: string }) {
             if (!cancelled) setIntent(d.intents.find((i) => i.path === path)?.summary ?? null);
           }
         }
-        // Findings touching this node — substring search against id + label-derived path.
         const labelGuess = urn.includes(':') ? urn.slice(urn.indexOf(':') + 1) : urn;
         const fr = await fetch(`/api/memory/feed?layer=all&query=${encodeURIComponent(labelGuess)}&limit=10`);
         if (fr.ok) {
