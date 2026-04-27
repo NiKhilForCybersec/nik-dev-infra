@@ -187,6 +187,10 @@ export function BrainView({ onClose }: { onClose: () => void }) {
   // Quality controls for the 3D layout
   const [frozen, setFrozen] = useState(false);
   const [showLabels, setShowLabels] = useState(false);
+  // Confidence floor — when on, hide everything below 1.0 (heuristic
+  // matches like resolution→concern fingerprint links + per-severity
+  // concern-confidence weights).
+  const [confidentOnly, setConfidentOnly] = useState(false);
   // Concern status (open / claimed-resolved / resolved / regressed) →
   // dim resolved concerns so the live brain emphasizes what's
   // CURRENTLY a problem, not historical noise.
@@ -204,7 +208,8 @@ export function BrainView({ onClose }: { onClose: () => void }) {
         // Direct view of register + facts (NOT the graph agent's
         // structural graph.json) so memory entities — concerns, notes,
         // commits, file-activity, agents, mcp tools — actually show up.
-        const r = await fetch('/api/memory/graph');
+        const url = confidentOnly ? '/api/memory/graph?minConfidence=1.0' : '/api/memory/graph';
+        const r = await fetch(url);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const g = (await r.json()) as Graph;
         if (!cancelled) setGraph(g);
@@ -213,7 +218,7 @@ export function BrainView({ onClose }: { onClose: () => void }) {
     void load();
     const id = setInterval(() => void load(), 20_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, []);
+  }, [confidentOnly]);
 
   // Concern status — refreshed alongside the graph reload.
   useEffect(() => {
@@ -466,6 +471,17 @@ export function BrainView({ onClose }: { onClose: () => void }) {
             color: frozen ? 'var(--warn)' : 'var(--fg-2)',
           }}
         >{frozen ? 'FROZEN' : 'FREEZE'}</button>
+        <button
+          onClick={() => setConfidentOnly((v) => !v)}
+          className="mono"
+          title={confidentOnly ? 'show all (heuristic links + medium-confidence entries included)' : 'show only memory at 100% confidence (drops heuristic resolution↔concern links + medium-severity weighted entries)'}
+          style={{
+            padding: '3px 8px', fontSize: 10,
+            background: confidentOnly ? 'var(--accent-soft)' : 'transparent',
+            borderColor: confidentOnly ? 'var(--accent)' : 'var(--hairline)',
+            color: confidentOnly ? 'var(--accent)' : 'var(--fg-2)',
+          }}
+        >100%</button>
         <button
           onClick={() => fgRef.current?.zoomToFit(800, 60)}
           className="mono"

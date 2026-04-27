@@ -374,6 +374,88 @@ app.post<{ Params: { id: string }; Body: { decision: 'approved' | 'rejected'; no
 // capture script either timed out before paint or hit an error state.
 // We surface `isBlank: true` so the UI can show a "re-run" hint instead
 // of a useless white image.
+// POST /api/memory/rebuild — controlled wipe + agent re-fire so the
+// memory layer reflects ONLY current truth.
+//
+// Wipes:    register, facts                  (everything agents re-derive)
+// PRESERVES: code_files                       (keeps intent_summary — expensive)
+//            wiki_pages, wiki_revisions      (curated long-form)
+//            notes                            (per-agent K/V scratchpad)
+//            approvals                        (in-flight queue)
+//            promotions                       (idempotency anchors)
+//            hooks                            (subscriber registrations)
+//            segments                         (namespace tree)
+//            findings (last 24h kept; older dropped)
+//            agent_runs (last 24h kept)
+//
+// After wipe, every deterministic + ingester agent is triggered so the
+// memory rebuilds in seconds. LLM agents wait for their normal interval
+// (or manual retrigger) — no point firing them all at once.
+//
+// Always snapshots first so the wipe is recoverable.
+app.post('/api/memory/rebuild', async (_req, reply) => {
+  // 1. Snapshot current state for recovery.
+  const { backupTo } = await import('./memory.ts');
+  const path = await import('node:path');
+  const fs = await import('node:fs');
+  const snapDir = path.resolve(config.targetPath, '..', 'data', 'snapshots');
+  // Use the dev-infra data dir, not the user repo's.
+  const here = path.dirname(new URL(import.meta.url).pathname);
+  const devDataSnapDir = path.resolve(here, '..', '..', 'data', 'snapshots');
+  if (!fs.existsSync(devDataSnapDir)) fs.mkdirSync(devDataSnapDir, { recursive: true });
+  const snapPath = path.resolve(devDataSnapDir, `pre-rebuild-${new Date().toISOString().replace(/[:.]/g, '-')}.db`);
+  let snapBytes = 0;
+  try {
+    snapBytes = await backupTo(snapPath);
+  } catch (e) {
+    reply.code(500);
+    return { error: `snapshot failed (refusing to wipe): ${(e as Error).message}` };
+  }
+
+  // 2. Counts before (for the response).
+  const before = {
+    register: query<{ n: number }>(`SELECT COUNT(*) AS n FROM register`)[0]?.n ?? 0,
+    facts: query<{ n: number }>(`SELECT COUNT(*) AS n FROM facts`)[0]?.n ?? 0,
+    findings: query<{ n: number }>(`SELECT COUNT(*) AS n FROM findings`)[0]?.n ?? 0,
+    agent_runs: query<{ n: number }>(`SELECT COUNT(*) AS n FROM agent_runs`)[0]?.n ?? 0,
+  };
+
+  // 3. Wipe via the typed reset (only fires when sandbox env or NODE_ENV=test
+  //    set — for production rebuild we use direct SQL through the read helper
+  //    via a write helper; we're going to call into raw db here).
+  const memModule = await import('./memory.ts');
+  // Use a custom internal wipe — _resetTables refuses outside test env.
+  // Direct prepared-statement DELETEs through query() won't work
+  // (query is read-only). The memory module exposes a `db` object only
+  // for internal use; we'll use its prepared-statement pattern via a
+  // small helper added below.
+  const wipeCounts = await memModule.rebuildWipe({ keepHours: 24 });
+
+  // 4. Trigger every deterministic ingester / extractor agent so memory
+  //    rebuilds immediately. LLM agents fire on their own interval; we
+  //    skip those to avoid burning the agent budget.
+  const agentsToRefire = [
+    'registry', 'graph', 'codebase-graph', 'concerns-ingest',
+    'resolutions-ingest', 'code-change-tracker', 'screenshots',
+    'screen-validator', 'self-awareness', 'memory-keeper',
+  ];
+  const fired: string[] = [];
+  for (const a of agentsToRefire) {
+    const r = triggerAgent(a);
+    if (r.ok) fired.push(a);
+  }
+
+  return {
+    ok: true,
+    snapshotPath: snapPath,
+    snapshotBytes: snapBytes,
+    before,
+    wiped: wipeCounts,
+    refired: fired,
+    message: `wiped ${wipeCounts.register} register + ${wipeCounts.facts} facts. Snapshot saved at ${snapPath} (${Math.round(snapBytes / 1024)} KB). ${fired.length} agents retriggered. Watch the rail — memory will rebuild over the next 30-60 seconds.`,
+  };
+});
+
 // REST: live brain graph — direct view of register + facts from the
 // memory layer (NOT the graph agent's graph.json snapshot, which only
 // includes structural topology). This is what BRAIN renders so the
@@ -382,12 +464,15 @@ app.post<{ Params: { id: string }; Body: { decision: 'approved' | 'rejected'; no
 //
 // Returns the same shape as /api/graph for drop-in replacement:
 //   { nodes: [{id, type, label, file?}], edges: [{from, to, kind}], builtAt }
-app.get('/api/memory/graph', async () => {
-  const nodes = query<{ urn: string; kind: string; label: string; file: string | null }>(
-    `SELECT urn, kind, label, file FROM register ORDER BY at DESC`,
+app.get<{ Querystring: { minConfidence?: string } }>('/api/memory/graph', async (req) => {
+  const minConf = req.query.minConfidence ? Number(req.query.minConfidence) : 0;
+  const nodes = query<{ urn: string; kind: string; label: string; file: string | null; confidence: number }>(
+    `SELECT urn, kind, label, file, confidence FROM register WHERE confidence >= ? ORDER BY at DESC`,
+    [minConf],
   );
-  const edges = query<{ subject: string; predicate: string; object: string }>(
-    `SELECT subject, predicate, object FROM facts ORDER BY at DESC LIMIT 5000`,
+  const edges = query<{ subject: string; predicate: string; object: string; confidence: number }>(
+    `SELECT subject, predicate, object, confidence FROM facts WHERE confidence >= ? ORDER BY at DESC LIMIT 5000`,
+    [minConf],
   );
   // Build a node-id set + add VIRTUAL nodes for pseudo-URN targets
   // (file:X, scope:X, section:X, author:X, tag:X, table:X) so memory

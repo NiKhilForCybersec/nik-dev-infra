@@ -806,6 +806,30 @@ export function vacuum(): void {
   sqliteVacuum.run();
 }
 
+/** Targeted wipe for the rebuild endpoint. Truncates derived state
+ *  (register, facts) + trims findings + agent_runs to the last
+ *  `keepHours` window. Preserves the expensive / curated / queue
+ *  tables (code_files, wiki_pages, wiki_revisions, notes, approvals,
+ *  promotions, hooks, segments). Returns counts of what was deleted.
+ *
+ *  Snapshot the DB before calling — there is no rollback. The
+ *  /api/memory/rebuild endpoint always snapshots first. */
+export function rebuildWipe(opts: { keepHours: number }): {
+  register: number; facts: number; findings: number; agent_runs: number;
+} {
+  const cutoff = Date.now() - opts.keepHours * 60 * 60 * 1000;
+  const r1 = db.prepare(`DELETE FROM register`).run();
+  const r2 = db.prepare(`DELETE FROM facts`).run();
+  const r3 = db.prepare(`DELETE FROM findings WHERE at < ?`).run(cutoff);
+  const r4 = db.prepare(`DELETE FROM agent_runs WHERE started_at < ?`).run(cutoff);
+  return {
+    register: r1.changes,
+    facts: r2.changes,
+    findings: r3.changes,
+    agent_runs: r4.changes,
+  };
+}
+
 /** TEST-ONLY: wipe every mutable table so vitest cases get a clean
  *  slate between assertions. Throws when called outside a test
  *  context (NODE_ENV=test or DEV_INFRA_DATA_DIR set), so a stray

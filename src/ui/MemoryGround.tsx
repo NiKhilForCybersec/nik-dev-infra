@@ -59,6 +59,9 @@ export function MemoryGround({ onClose }: { onClose: () => void }) {
   const [noteText, setNoteText] = useState('');
   const [noteScope, setNoteScope] = useState('session');
   const [noteSaving, setNoteSaving] = useState(false);
+  // Rebuild flow
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildResult, setRebuildResult] = useState<string | null>(null);
 
   const load = async () => {
     try {
@@ -82,6 +85,23 @@ export function MemoryGround({ onClose }: { onClose: () => void }) {
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layer, search, time]);
+
+  const rebuild = async () => {
+    if (!confirm('Rebuild memory?\n\nThis WIPES register + facts and trims findings/runs older than 24h, then re-fires every deterministic agent so memory rebuilds from current code state. PRESERVES intent extracts, wiki, notes, approvals, hooks. Always snapshots first.\n\nProceed?')) return;
+    setRebuilding(true);
+    setRebuildResult(null);
+    try {
+      const r = await fetch('/api/memory/rebuild', { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) {
+        setError(j.error ?? `HTTP ${r.status}`);
+      } else {
+        setRebuildResult(j.message);
+        setTimeout(() => void load(), 4_000);
+      }
+    } catch (e) { setError((e as Error).message); }
+    finally { setRebuilding(false); }
+  };
 
   const dropNote = async () => {
     if (!noteText.trim()) return;
@@ -131,8 +151,26 @@ export function MemoryGround({ onClose }: { onClose: () => void }) {
           className="mono"
           style={{ flex: 1, minWidth: 220, padding: '4px 8px', fontSize: 12 }}
         />
+        <button
+          onClick={() => void rebuild()}
+          disabled={rebuilding}
+          className="mono"
+          title="Wipe register + facts + old findings, snapshot first, re-fire all deterministic agents so memory rebuilds from current truth. Preserves intents / wiki / notes / approvals."
+          style={{
+            padding: '4px 10px', fontSize: 10, letterSpacing: 1,
+            color: rebuilding ? 'var(--fg-3)' : 'var(--warn)',
+            borderColor: rebuilding ? 'var(--hairline)' : 'var(--warn)',
+            cursor: rebuilding ? 'wait' : 'pointer',
+          }}
+        >{rebuilding ? 'REBUILDING…' : 'REBUILD MEMORY'}</button>
         <button onClick={onClose} className="mono" style={{ marginLeft: 'auto', padding: '4px 10px', fontSize: 12 }}>×</button>
       </div>
+
+      {rebuildResult && (
+        <div style={{ padding: '10px 18px', background: 'rgba(255,209,102,0.08)', borderBottom: '1px solid var(--warn)', fontSize: 11, color: 'var(--fg-2)' }}>
+          {rebuildResult}
+        </div>
+      )}
 
       {/* Filter row */}
       <div style={{ padding: '10px 18px', borderBottom: '1px solid var(--hairline)', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
