@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseJsonArray, runClaude } from '../claude.ts';
 import { parseFinding, rejectedFinding } from '../findings.ts';
+import { buildProjectGrounding, renderProjectGrounding } from '../grounding.ts';
 import type { Agent } from '../types.ts';
 import { DriftFindingSchema } from './schemas.ts';
 
@@ -20,7 +21,8 @@ export const driftAgent: Agent = {
   ],
   intervalMs: 0,
   run: async () => {
-    const r = await runClaude({ prompt: PROMPT, timeoutMs: 120_000 });
+    const grounding = renderProjectGrounding(buildProjectGrounding());
+    const r = await runClaude({ prompt: grounding + PROMPT, timeoutMs: 120_000 });
     const raw = parseJsonArray<unknown>(r.text);
     if (raw === null) {
       if (r.text.trim().length === 0) return [];
