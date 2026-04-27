@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AgentMetrics } from './AgentMetrics';
 import { AutoFixPanel } from './AutoFixPanel';
 import { BootstrapProgress } from './BootstrapProgress';
+import { BrainView } from './BrainView';
 import { EntitiesPanel } from './EntitiesPanel';
 import { GraphPanel } from './GraphPanel';
 import { GraphPlayground } from './GraphPlayground';
@@ -77,6 +78,7 @@ export function App() {
   const [setupOpen, setSetupOpen] = useState(false);
   const [autoFixOpen, setAutoFixOpen] = useState(false);
   const [memoryGroundOpen, setMemoryGroundOpen] = useState(false);
+  const [brainOpen, setBrainOpen] = useState(false);
   // Per-agent in-flight tracking so the manual "run" button shows visible
   // pending state instead of fire-and-forget. Cleared when the next `run`
   // event for that agent arrives over WebSocket.
@@ -261,6 +263,11 @@ export function App() {
             className="mono"
             style={{ padding: '4px 10px', fontSize: 10, letterSpacing: 1, color: 'var(--accent)', borderColor: 'var(--accent)' }}
           >MEMORY</button>
+          <button
+            onClick={() => setBrainOpen(true)}
+            className="mono"
+            style={{ padding: '4px 10px', fontSize: 10, letterSpacing: 1, color: 'var(--accent)', borderColor: 'var(--accent)' }}
+          >BRAIN</button>
           <div className="mono" style={{ fontSize: 11, color: connected ? 'var(--ok)' : 'var(--err)', display: 'flex', alignItems: 'center', gap: 8 }}>
             <span
               className={livePulse ? 'live-pulse' : ''}
@@ -460,6 +467,7 @@ export function App() {
       {setupOpen && <SetupWizard onClose={() => setSetupOpen(false)} />}
       {autoFixOpen && <AutoFixPanel onClose={() => setAutoFixOpen(false)} />}
       {memoryGroundOpen && <MemoryGround onClose={() => setMemoryGroundOpen(false)} />}
+      {brainOpen && <BrainView onClose={() => setBrainOpen(false)} />}
     </div>
   );
 }

@@ -85,12 +85,12 @@ export const codeTools: ToolDef[] = [
   },
   {
     name: 'memory.code.concerns',
-    description: 'Returns the active concerns (curator output + ingester rows). Filterable by query substring + severity.',
+    description: 'Returns concerns (open by default — fixed concerns hidden unless include_resolved=true). A concern is "open" until a Resolutions.md entry links to it AND the curator audits the resolution as verified. claimed-resolved (no audit yet) and regressed (curator graded it cosmetic / unverifiable) also surface as open.',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Optional substring filter on summary' },
-        severity: { type: 'string', description: 'Optional: info / warn / error' },
+        query: { type: 'string', description: 'Optional substring filter on label' },
+        include_resolved: { type: 'boolean', description: 'Default false — set true to include curator-verified resolved concerns' },
         limit: { type: 'number', description: 'Default 30' },
       },
     },
@@ -238,25 +238,66 @@ export async function callCodeTool(name: string, args: Json): Promise<ToolResult
     case 'memory.code.concerns': {
       const limit = Math.min(typeof args.limit === 'number' ? args.limit : 30, 100);
       const queryFilter = typeof args.query === 'string' ? args.query : null;
-      const sevFilter = typeof args.severity === 'string' ? args.severity : null;
-      const conds: string[] = [`(agent = 'concerns-ingest' OR (agent = 'curator' AND kind LIKE 'curator:concern-%'))`];
+      const includeResolved = args.include_resolved === true;
+
+      // Read concerns from the register (concerns-ingest's authoritative
+      // entity table) and join with derived status.
+      const conds: string[] = [`agent = 'concerns-ingest'`, `kind = 'concern'`];
       const params: unknown[] = [];
-      if (queryFilter) { conds.push('summary LIKE ?'); params.push(`%${queryFilter}%`); }
-      if (sevFilter) { conds.push('severity = ?'); params.push(sevFilter); }
-      params.push(limit);
-      const rows = query<{ at: number; kind: string; severity: string; summary: string; file: string | null }>(
-        `SELECT at, kind, severity, summary, file FROM findings
+      if (queryFilter) { conds.push('label LIKE ?'); params.push(`%${queryFilter}%`); }
+      params.push(limit * 3);    // overfetch then status-filter
+
+      const rows = query<{ urn: string; label: string; file: string | null; segment: string | null; confidence: number; at: number }>(
+        `SELECT urn, label, file, segment, confidence, at FROM register
            WHERE ${conds.join(' AND ')}
            ORDER BY at DESC LIMIT ?`,
         params,
       );
       if (rows.length === 0) return ok(`(no concerns yet — concerns-ingest agent may not have run; current concernsFile=${config.concernsFile})`);
+
+      // Compute status per concern by walking resolves facts.
+      const linkedByConcern = new Map<string, string[]>();
+      const resolvesRows = query<{ subject: string; object: string }>(
+        `SELECT subject, object FROM facts WHERE agent = 'resolutions-ingest' AND predicate = 'resolves'`,
+      );
+      for (const r of resolvesRows) {
+        const list = linkedByConcern.get(r.object) ?? [];
+        list.push(r.subject);
+        linkedByConcern.set(r.object, list);
+      }
+      const verdictRows = query<{ summary: string; kind: string }>(
+        `SELECT summary, kind FROM findings WHERE agent = 'curator' AND kind LIKE 'curator:resolution-%' ORDER BY at DESC`,
+      );
+      const statusFor = (urn: string): 'open' | 'claimed-resolved' | 'resolved' | 'regressed' => {
+        const linked = linkedByConcern.get(urn) ?? [];
+        if (linked.length === 0) return 'open';
+        let best: 'claimed-resolved' | 'resolved' | 'regressed' = 'claimed-resolved';
+        for (const rUrn of linked) {
+          const fp = rUrn.replace(/^resolution:/, '');
+          const v = verdictRows.find((row) => row.summary.includes(fp.slice(0, 12)));
+          if (!v) continue;
+          if (v.kind === 'curator:resolution-verified') return 'resolved';
+          if (v.kind === 'curator:resolution-cosmetic' || v.kind === 'curator:resolution-regressed' || v.kind === 'curator:resolution-unverifiable' || v.kind === 'curator:resolution-no-proof') {
+            best = 'regressed';
+          }
+        }
+        return best;
+      };
+      const filtered = rows
+        .map((r) => ({ ...r, status: statusFor(r.urn) }))
+        .filter((r) => includeResolved || r.status !== 'resolved')
+        .slice(0, limit);
+
       return json({
-        count: rows.length,
-        concerns: rows.map((r) => ({
-          at: new Date(r.at).toISOString(),
-          severity: r.severity, kind: r.kind, summary: r.summary,
+        count: filtered.length,
+        concerns: filtered.map((r) => ({
+          urn: r.urn,
+          status: r.status,
+          confidence: r.confidence,
+          label: r.label,
           ...(r.file ? { file: r.file } : {}),
+          ...(r.segment ? { segment: r.segment } : {}),
+          at: new Date(r.at).toISOString(),
         })),
       });
     }

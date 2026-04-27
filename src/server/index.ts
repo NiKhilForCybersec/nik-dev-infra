@@ -374,6 +374,85 @@ app.post<{ Params: { id: string }; Body: { decision: 'approved' | 'rejected'; no
 // capture script either timed out before paint or hit an error state.
 // We surface `isBlank: true` so the UI can show a "re-run" hint instead
 // of a useless white image.
+// REST: derived status for every concern entity.
+// A concern is `open` by default. If a (resolution -> resolves -> concern)
+// fact exists, look up the curator's most recent audit verdict for
+// that resolution:
+//   curator:resolution-verified     → concern is `resolved`
+//   curator:resolution-cosmetic     → concern is `regressed`
+//   curator:resolution-regressed    → concern is `regressed`
+//   curator:resolution-unverifiable → concern is `regressed`
+//   (no audit yet)                  → concern is `claimed-resolved` (a fix
+//                                     was logged but the curator hasn't
+//                                     graded it; UI tints differently
+//                                     from open or resolved)
+//
+// Pure read-time derivation — no schema migration, no stale-state risk.
+app.get('/api/memory/concern-status', async () => {
+  const concerns = query<{ urn: string }>(
+    `SELECT urn FROM register WHERE agent = 'concerns-ingest' AND kind = 'concern'`,
+  );
+  const resolutions = query<{ subject: string; object: string }>(
+    `SELECT subject, object FROM facts
+       WHERE agent = 'resolutions-ingest' AND predicate = 'resolves'`,
+  );
+  // Map concern → list of resolutions that claim to resolve it.
+  const byConcern = new Map<string, string[]>();
+  for (const r of resolutions) {
+    const list = byConcern.get(r.object) ?? [];
+    list.push(r.subject);
+    byConcern.set(r.object, list);
+  }
+  // For each resolution we'll need the latest curator verdict — pull
+  // them all in one query, indexed by the resolution's referenced text
+  // (curator findings carry the resolution heading in the summary).
+  const verdicts = query<{ kind: string; summary: string; at: number }>(
+    `SELECT kind, summary, at FROM findings
+       WHERE agent = 'curator' AND kind LIKE 'curator:resolution-%'
+       ORDER BY at DESC`,
+  );
+  // Heuristic: a verdict applies to a resolution if the verdict's
+  // summary contains the resolution's URN-derived label fingerprint.
+  // Cheap because resolution count is small.
+  function verdictFor(resolutionUrn: string): string | null {
+    const fp = resolutionUrn.replace(/^resolution:/, '');
+    for (const v of verdicts) {
+      if (v.summary.includes(fp.slice(0, 12))) return v.kind;
+    }
+    return null;
+  }
+  type Status = 'open' | 'claimed-resolved' | 'resolved' | 'regressed';
+  const statuses: Record<string, { status: Status; resolutionCount: number; latestVerdict: string | null }> = {};
+  for (const c of concerns) {
+    const linkedResolutions = byConcern.get(c.urn) ?? [];
+    if (linkedResolutions.length === 0) {
+      statuses[c.urn] = { status: 'open', resolutionCount: 0, latestVerdict: null };
+      continue;
+    }
+    let bestStatus: Status = 'claimed-resolved';
+    let latestVerdict: string | null = null;
+    for (const rUrn of linkedResolutions) {
+      const v = verdictFor(rUrn);
+      if (!v) continue;
+      latestVerdict = v;
+      if (v === 'curator:resolution-verified') { bestStatus = 'resolved'; break; }
+      if (v === 'curator:resolution-cosmetic' || v === 'curator:resolution-regressed' || v === 'curator:resolution-unverifiable' || v === 'curator:resolution-no-proof') {
+        bestStatus = 'regressed';
+      }
+    }
+    statuses[c.urn] = { status: bestStatus, resolutionCount: linkedResolutions.length, latestVerdict };
+  }
+  return {
+    counts: {
+      open: Object.values(statuses).filter((s) => s.status === 'open').length,
+      claimedResolved: Object.values(statuses).filter((s) => s.status === 'claimed-resolved').length,
+      resolved: Object.values(statuses).filter((s) => s.status === 'resolved').length,
+      regressed: Object.values(statuses).filter((s) => s.status === 'regressed').length,
+    },
+    statuses,
+  };
+});
+
 // POST /api/memory/note — UI's "drop a note" button. Same write path
 // as the MCP server's memory.note tool.
 app.post<{ Body: { text?: string; scope?: string; tags?: string[] } }>('/api/memory/note', async (req, reply) => {
