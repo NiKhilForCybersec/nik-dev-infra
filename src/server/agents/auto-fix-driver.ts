@@ -220,11 +220,41 @@ function consecutiveFailures(): number {
   return failures;
 }
 
+// ─── confidence gate (hard-path principle: 100% factual or skip) ───────────
+
+type ActionableCheck = { actionable: true } | { actionable: false; reason: string };
+
+function isActionable(concern: Concern, brokenVerdict: CuratorVerdict | undefined): ActionableCheck {
+  // Hard-path: a concern only goes to dispatch when we're confident about
+  // both WHAT to fix and WHERE. Otherwise it gets needs-clarification and
+  // the user (or curator next pass) tightens the wording.
+  const stripped = concern.text.replace(/[*_`[\]()<>]/g, '').trim();
+  if (stripped.length < 30) return { actionable: false, reason: 'concern text too short to act on (<30 chars meaningful)' };
+
+  // A concern needs at least ONE of: a file reference, OR a curator verdict
+  // explaining what's broken, OR an explicit imperative verb in the text.
+  const hasFileRef = !!concern.fileRef;
+  const hasCuratorContext = !!brokenVerdict;
+  const hasImperative = /\b(add|remove|fix|change|update|rename|delete|move|implement|wire|hook|expose|surface|guard|prevent|ensure|require|reject|migrate|replace)\b/i.test(stripped);
+
+  if (!hasFileRef && !hasCuratorContext && !hasImperative) {
+    return { actionable: false, reason: 'no file ref, no curator verdict, no imperative verb — concern is observational, not actionable' };
+  }
+
+  // Vague / philosophical concerns ("the UX feels off", "we should think about X")
+  // shouldn't reach a dispatch. Catch a few common shapes.
+  if (/\b(maybe|perhaps|might|could be nice|consider|think about|feels like|seems off|wonder if)\b/i.test(stripped)) {
+    return { actionable: false, reason: 'concern is speculative ("maybe / perhaps / consider") — not 100% factual, not dispatchable' };
+  }
+
+  return { actionable: true };
+}
+
 // ─── dispatch prompt builder ───────────────────────────────────────────────
 
 function buildPrompt(concern: Concern, brokenVerdict: CuratorVerdict | undefined): string {
   const verdictNote = brokenVerdict
-    ? `The previous attempt at this concern was flagged by the dev-infra curator as **${brokenVerdict}**. Do better this time — verify the fix actually addresses the concern, not just the symptom.`
+    ? `The previous attempt at this concern was flagged by the dev-infra curator as **${brokenVerdict}**. Do better this time — verify the fix actually addresses the root cause, not just the symptom.`
     : `This concern has not been addressed yet.`;
   return `You are working in the user's project repo. The dev-infra background system has identified this open concern from the project's \`${config.concernsFile}\`:
 
@@ -232,26 +262,51 @@ function buildPrompt(concern: Concern, brokenVerdict: CuratorVerdict | undefined
 
 ${verdictNote}
 
-**Your task:**
+# CORE PRINCIPLE — HARD PATH ONLY
 
-1. **Read** the relevant code first. ${concern.fileRef ? `Start from \`${concern.fileRef}\` if it's still relevant, then trace.` : 'Trace from a likely entry point.'}
-2. **Read** \`${config.concernsFile}\` and \`${config.resolutionsFile}\` (if present) for context — do NOT delete or rewrite existing entries in either file.
-3. **Make the smallest correct change** that resolves the concern. No drive-by refactors. No new features.
-4. **Append** a new entry to \`${config.resolutionsFile}\` (create the file if missing) with this shape:
-   - Heading: \`## ${new Date().toISOString().slice(0, 10)} — <one-line summary>\`
-   - Body bullets:
-     - \`- Addresses concern: "<quoted bullet from Concerns.md>"\`
-     - \`- File:line(s) changed: <file>:<line>\` (one bullet per file)
-     - \`- Verification: <how you confirmed the fix>\` (e.g. "ran the type-checker", "captured a fresh screenshot", "manually traced the call site")
-5. If you cannot fix this with high confidence, **do not edit code**. Instead, append a Resolutions.md entry that explains why (e.g. "needs design decision", "ambiguous concern text"). The dev-infra curator will pick that up.
+This is the dev-infra product's main instruction hook: **no minimal performance, no minimal confidence, never the happy path.** Every step here must be 100% factual + verified before you claim it. If at any point your confidence drops below "I have evidence this is correct," stop editing and write a clarification request instead. Below 100% confidence = no edit. Better to leave the concern open with an honest note than to ship a fix that looks right but isn't.
 
-**Hard rules:**
-- Never modify \`${config.concernsFile}\` itself — that file is owned by the user / curator.
+# Your task
+
+1. **READ before you change anything.** ${concern.fileRef ? `Start from \`${concern.fileRef}\` and trace from there.` : 'Find the relevant code via Grep — do not guess.'} Read enough of the surrounding context that you can name what the file does, who calls it, and what it returns. If you can't, expand the read.
+2. **READ** \`${config.concernsFile}\` and \`${config.resolutionsFile}\` (if present) for context. Never delete or rewrite existing entries in either file.
+3. **Decide whether you can fix this with 100% confidence.**
+   - If you cannot — for ANY reason (ambiguous wording, missing context, would require a design decision, can't trace the call site, can't verify the fix worked) — STOP. Skip to step 5 with the "cannot-fix" branch.
+   - If you can, continue.
+4. **Make the smallest correct change.** No drive-by refactors. No new features. No reformatting unrelated lines. The diff should be the minimum that addresses the concern.
+5. **Verify before claiming success.** Pick the strongest verification you can:
+   - Type-check passes: \`npx tsc --noEmit\` (or whatever the project uses) — if available, this is mandatory.
+   - The code reads correctly: trace the call site you changed and confirm the new behavior matches what the concern asked for.
+   - For UI changes: note that the dev-infra screen-prober will re-capture the screen — leave a note in Resolutions.md saying "expect screenshot diff."
+   - **If you have NO way to verify, you do not have 100% confidence — go to the cannot-fix branch instead.**
+6. **Append** a new entry to \`${config.resolutionsFile}\` (create the file if missing). Two shapes — pick the one that matches what you actually did:
+
+   **Shape A — fix landed (only when you have evidence):**
+   \`\`\`markdown
+   ## ${new Date().toISOString().slice(0, 10)} — <one-line summary>
+   - Addresses concern: "<quoted text from Concerns.md, first 80 chars>"
+   - Files changed: <path>:<line> (one bullet per file)
+   - Verification: <concrete evidence — e.g. "tsc --noEmit passes", "traced X→Y and the new return value matches the concern's expectation", "screen-prober will re-capture HomeScreen">
+   - Confidence: 100% — <why>
+   \`\`\`
+
+   **Shape B — cannot fix (the honest path):**
+   \`\`\`markdown
+   ## ${new Date().toISOString().slice(0, 10)} — needs clarification: <one-line>
+   - Addresses concern: "<quoted text from Concerns.md, first 80 chars>"
+   - Why I'm not editing: <specific blocker — e.g. "concern names a file that doesn't exist", "would require a UX decision I can't make alone", "could not trace the call site after reading X, Y, Z">
+   - What I'd need: <e.g. "a concrete file:line", "a decision on X vs Y", "an example of the desired behavior">
+   \`\`\`
+
+# Hard rules
+
+- Never modify \`${config.concernsFile}\` itself — owned by the user / curator.
 - Never delete prior Resolutions.md entries.
-- If \`${config.targetPath}/.dev-infra-pause\` appears at any point, stop and exit cleanly.
-- Don't run destructive shell commands. Read, Edit, and Write are enough.
+- If \`${config.targetPath}/${config.autoFixLoop.killSwitchFile}\` appears at any point, stop and exit cleanly.
+- Don't run destructive shell commands. Read, Edit, Write, Glob, Grep are your tools.
+- **If you would normally hedge ("this should work", "I think this is right"), use Shape B instead.** The product's value depends on its outputs being trustworthy.
 
-When done, output a one-line summary of what you changed (or why you didn't).`;
+When done, output a one-line summary: either "fixed: <X> · verified by <Y>" or "deferred: <reason>".`;
 }
 
 // ─── agent ─────────────────────────────────────────────────────────────────
@@ -364,25 +419,59 @@ export const autoFixDriverAgent: Agent = {
       return true;
     });
 
-    if (gaps.length === 0) {
-      return [{
+    // Hard-path filter: split actionable vs needs-clarification. Vague /
+    // observational / speculative concerns get a clarification finding
+    // and are never dispatched. The user (or curator next pass) tightens
+    // the wording, and on the next cycle the concern can be dispatched.
+    const actionable: Concern[] = [];
+    const unactionable: Array<{ concern: Concern; reason: string }> = [];
+    for (const cn of gaps) {
+      const verdict = broken.get(cn.fingerprint);
+      const check = isActionable(cn, verdict);
+      if (check.actionable) actionable.push(cn);
+      else unactionable.push({ concern: cn, reason: check.reason });
+    }
+    // Emit one needs-clarification per unactionable gap, but keep the rail
+    // calm: cap at 5 per cycle and the rest go into a digest payload.
+    const top = unactionable.slice(0, 5);
+    for (const u of top) {
+      out.push({
+        id: newId(),
+        agent: 'auto-fix-driver',
+        kind: 'auto-fix:needs-clarification',
+        at: now,
+        severity: 'info',
+        summary: `not actionable · ${u.reason} · "${u.concern.text.slice(0, 80)}${u.concern.text.length > 80 ? '…' : ''}"`,
+        payload: {
+          fingerprint: u.concern.fingerprint,
+          concernText: u.concern.text,
+          reason: u.reason,
+        },
+      });
+    }
+
+    if (actionable.length === 0) {
+      out.push({
         id: newId(),
         agent: 'auto-fix-driver',
         kind: 'auto-fix:no-targets',
         at: now,
         severity: 'info',
-        summary: `${concerns.length} concerns · ${resolved.size} resolved · ${broken.size} flagged-broken · 0 gaps in scope (or all hit attempt cap)`,
+        summary: `${concerns.length} concerns · ${resolved.size} resolved · ${broken.size} flagged-broken · ${gaps.length} gaps · ${unactionable.length} needs-clarification · 0 actionable`,
         payload: {
           concernCount: concerns.length,
           resolvedCount: resolved.size,
           brokenCount: broken.size,
+          gapsTotal: gaps.length,
+          unactionableTotal: unactionable.length,
         },
-      }];
+      });
+      return out;
     }
 
     // Rank: severity (error > warn > info) → fewer prior attempts → newer.
     const sevWeight: Record<Severity, number> = { error: 3, warn: 2, info: 1 };
-    gaps.sort((a, b) => {
+    actionable.sort((a, b) => {
       const sd = sevWeight[b.severity] - sevWeight[a.severity];
       if (sd !== 0) return sd;
       const ad = attemptsFor(a.fingerprint) - attemptsFor(b.fingerprint);
@@ -390,7 +479,7 @@ export const autoFixDriverAgent: Agent = {
       return b.rawLineNo - a.rawLineNo;
     });
 
-    const target = gaps[0]!;
+    const target = actionable[0]!;
     const verdict = broken.get(target.fingerprint);
     const prompt = buildPrompt(target, verdict);
 
@@ -411,6 +500,8 @@ export const autoFixDriverAgent: Agent = {
           priorVerdict: verdict ?? null,
           priorAttempts: attemptsFor(target.fingerprint),
           gapsTotal: gaps.length,
+          actionableTotal: actionable.length,
+          unactionableTotal: unactionable.length,
           prompt,
         },
       });
@@ -420,8 +511,15 @@ export const autoFixDriverAgent: Agent = {
         kind: 'auto-fix:summary',
         at: now,
         severity: 'info',
-        summary: `dry-run · ${concerns.length} concerns · ${resolved.size} resolved · ${gaps.length} gaps · target: ${target.fingerprint}`,
-        payload: { dryRun: true, concerns: concerns.length, resolved: resolved.size, gaps: gaps.length },
+        summary: `dry-run · ${concerns.length} concerns · ${resolved.size} resolved · ${actionable.length} actionable / ${unactionable.length} needs-clarification · target: ${target.fingerprint}`,
+        payload: {
+          dryRun: true,
+          concerns: concerns.length,
+          resolved: resolved.size,
+          gaps: gaps.length,
+          actionable: actionable.length,
+          unactionable: unactionable.length,
+        },
       });
       return out;
     }

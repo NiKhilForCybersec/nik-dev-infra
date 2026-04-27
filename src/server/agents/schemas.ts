@@ -227,6 +227,7 @@ export const AutoFixDriverFindingSchema = Base.extend({
     'auto-fix:halted-failures',
     'auto-fix:dirty-tree',
     'auto-fix:no-concerns-file',
+    'auto-fix:needs-clarification',
     'auto-fix:summary',
   ]),
 });
