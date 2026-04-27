@@ -61,6 +61,23 @@ const NODE_COLOR: Record<string, string> = {
   agent:         '#c389ff',
 };
 
+// MEMORY kinds — what BRAIN shows by default. The "second brain" view
+// is about what dev-infra REMEMBERS (concerns / resolutions / notes /
+// commits / wiki / file activity / its own self-model), not the code's
+// structural topology. Topology stays in the PLAYGROUND (2D Cytoscape).
+const MEMORY_KINDS = new Set([
+  'concern', 'resolution', 'note', 'commit', 'file-activity',
+  'self', 'agent', 'mcp_server', 'mcp_tool',
+]);
+
+// Which fact predicates make sense for the memory subgraph (vs. the
+// structural ones like imports / exported_by / renders). When showing
+// memory-only, hide structural edges so the brain feels coherent.
+const MEMORY_PREDICATES = new Set([
+  'targets', 'raised_in', 'resolves', 'modified', 'authored_by',
+  'note_in_scope', 'tagged', 'has_agent', 'has_screenshot',
+]);
+
 const EDGE_COLOR: Record<string, string> = {
   imports:        'rgba(98, 181, 255, 0.4)',
   imports_dynamic:'rgba(98, 181, 255, 0.25)',
@@ -85,6 +102,36 @@ const EDGE_COLOR: Record<string, string> = {
   has_agent:      'rgba(195, 137, 255, 0.3)',
   default:        'rgba(120, 120, 140, 0.25)',
 };
+
+// Build a small text sprite for an always-on node label. Uses a
+// canvas texture so the label stays readable regardless of camera
+// distance (vs ForceGraph3D's built-in nodeLabel which is hover-only).
+function makeLabelSprite(text: string): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d')!;
+  const fontPx = 28;
+  ctx.font = `${fontPx}px JetBrains Mono, monospace`;
+  const padding = 6;
+  const w = Math.max(40, ctx.measureText(text).width + padding * 2);
+  const h = fontPx + padding * 2;
+  canvas.width = Math.ceil(w);
+  canvas.height = Math.ceil(h);
+  // Re-set context font after canvas resize (resize clears state).
+  ctx.font = `${fontPx}px JetBrains Mono, monospace`;
+  ctx.fillStyle = 'rgba(10, 10, 14, 0.85)';
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#e8e8ec';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, padding, h / 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.LinearFilter;
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+  const sprite = new THREE.Sprite(mat);
+  // World units: 0.2 units per canvas pixel keeps labels readable at
+  // typical zoom levels for a settled brain.
+  sprite.scale.set(w * 0.2, h * 0.2, 1);
+  return sprite;
+}
 
 // Blend a hex colour toward the dark canvas background so resolved
 // nodes recede visually without disappearing entirely. factor=1 means
@@ -118,9 +165,15 @@ export function BrainView({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [filter, setFilter] = useState('');
+  // Default mode: MEMORY ONLY. Toggle to ALL to overlay the project
+  // topology (which is what PLAYGROUND already renders in 2D).
+  const [scope, setScope] = useState<'memory' | 'all'>('memory');
   const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(new Set());
   const [pulses, setPulses] = useState<Pulse[]>([]);
   const [liveCount, setLiveCount] = useState(0);
+  // Quality controls for the 3D layout
+  const [frozen, setFrozen] = useState(false);
+  const [showLabels, setShowLabels] = useState(false);
   // Concern status (open / claimed-resolved / resolved / regressed) →
   // dim resolved concerns so the live brain emphasizes what's
   // CURRENTLY a problem, not historical noise.
@@ -227,7 +280,9 @@ export function BrainView({ onClose }: { onClose: () => void }) {
   const data = useMemo(() => {
     if (!graph) return { nodes: [] as GraphNode[], links: [] as GraphLink[] };
     const q = filter.trim().toLowerCase();
+    const inScope = (n: RawNode) => scope === 'all' || MEMORY_KINDS.has(n.type);
     const visible = (n: RawNode) =>
+      inScope(n) &&
       !hiddenKinds.has(n.type) &&
       (!q || n.label.toLowerCase().includes(q) || n.id.toLowerCase().includes(q));
     const visibleIds = new Set(graph.nodes.filter(visible).map((n) => n.id));
@@ -266,8 +321,9 @@ export function BrainView({ onClose }: { onClose: () => void }) {
         };
       });
 
+    const linkInScope = (k: string) => scope === 'all' || MEMORY_PREDICATES.has(k);
     const links: GraphLink[] = graph.edges
-      .filter((e) => visibleIds.has(e.from) && visibleIds.has(e.to))
+      .filter((e) => visibleIds.has(e.from) && visibleIds.has(e.to) && linkInScope(e.kind))
       .map((e) => ({
         source: e.from,
         target: e.to,
@@ -276,7 +332,7 @@ export function BrainView({ onClose }: { onClose: () => void }) {
       }));
 
     return { nodes, links };
-  }, [graph, filter, hiddenKinds, concernStatus]);
+  }, [graph, filter, hiddenKinds, concernStatus, scope]);
 
   // Per-kind counts for the legend / filter.
   const kindCounts = useMemo(() => {
@@ -301,9 +357,10 @@ export function BrainView({ onClose }: { onClose: () => void }) {
     );
   };
 
-  // Three.js node rendering — sphere with optional pulse halo.
-  const nodeThreeObject = (node: any) => {
-    const n = node as GraphNode;
+  // Three.js node rendering — sphere + optional pulse halo + optional
+  // always-on label sprite.
+  const nodeThreeObject = (node: GraphNode, withLabel: boolean) => {
+    const n = node;
     const pulse = pulses.find((p) => p.nodeId === n.id);
     const group = new THREE.Group();
     const sphere = new THREE.Mesh(
@@ -316,12 +373,16 @@ export function BrainView({ onClose }: { onClose: () => void }) {
     );
     group.add(sphere);
     if (pulse) {
-      // Halo ring during pulse — quick fade.
       const halo = new THREE.Mesh(
         new THREE.SphereGeometry(n.size * 1.8, 16, 12),
         new THREE.MeshBasicMaterial({ color: n.baseColor, transparent: true, opacity: 0.25 * pulse.intensity, depthWrite: false }),
       );
       group.add(halo);
+    }
+    if (withLabel) {
+      const sprite = makeLabelSprite(n.label.slice(0, 28));
+      sprite.position.set(0, n.size + 4, 0);
+      group.add(sprite);
     }
     return group;
   };
@@ -344,8 +405,54 @@ export function BrainView({ onClose }: { onClose: () => void }) {
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           className="mono"
-          style={{ minWidth: 220, padding: '4px 8px', fontSize: 12 }}
+          style={{ minWidth: 200, padding: '4px 8px', fontSize: 12 }}
         />
+        {/* Scope toggle: MEMORY (default) vs ALL (overlay topology) */}
+        <div style={{ display: 'flex', gap: 4 }}>
+          {(['memory', 'all'] as const).map((s) => (
+            <button
+              key={s}
+              onClick={() => setScope(s)}
+              className="mono"
+              title={s === 'memory' ? 'concerns / resolutions / notes / commits / activity / agents — what dev-infra REMEMBERS' : 'overlay the project topology too (modules / functions / screens / etc.) — same data PLAYGROUND shows in 2D'}
+              style={{
+                padding: '3px 8px', fontSize: 10,
+                background: scope === s ? 'var(--accent-soft)' : 'transparent',
+                borderColor: scope === s ? 'var(--accent)' : 'var(--hairline)',
+                color: scope === s ? 'var(--accent)' : 'var(--fg-2)',
+              }}
+            >{s === 'memory' ? 'MEMORY' : 'ALL'}</button>
+          ))}
+        </div>
+        {/* Quality controls */}
+        <button
+          onClick={() => setShowLabels((v) => !v)}
+          className="mono"
+          title="always-on labels (vs hover only)"
+          style={{
+            padding: '3px 8px', fontSize: 10,
+            background: showLabels ? 'var(--accent-soft)' : 'transparent',
+            borderColor: showLabels ? 'var(--accent)' : 'var(--hairline)',
+            color: showLabels ? 'var(--accent)' : 'var(--fg-2)',
+          }}
+        >LABELS</button>
+        <button
+          onClick={() => setFrozen((v) => !v)}
+          className="mono"
+          title={frozen ? 'resume physics' : 'freeze layout — stop the bouncing'}
+          style={{
+            padding: '3px 8px', fontSize: 10,
+            background: frozen ? 'var(--warn)' + '22' : 'transparent',
+            borderColor: frozen ? 'var(--warn)' : 'var(--hairline)',
+            color: frozen ? 'var(--warn)' : 'var(--fg-2)',
+          }}
+        >{frozen ? 'FROZEN' : 'FREEZE'}</button>
+        <button
+          onClick={() => fgRef.current?.zoomToFit(800, 60)}
+          className="mono"
+          title="fit all visible nodes in view"
+          style={{ padding: '3px 8px', fontSize: 10, color: 'var(--fg-2)' }}
+        >RECENTER</button>
         <button onClick={onClose} className="mono" style={{ marginLeft: 'auto', padding: '4px 10px', fontSize: 12 }}>×</button>
       </div>
 
@@ -387,10 +494,10 @@ export function BrainView({ onClose }: { onClose: () => void }) {
               height={containerSize.h}
               graphData={data}
               nodeLabel={(n: any) => `${n.type}: ${n.label}`}
-              nodeThreeObject={nodeThreeObject}
+              nodeThreeObject={(n: any) => nodeThreeObject(n, showLabels)}
               linkColor={(l: any) => l.color}
-              linkOpacity={0.4}
-              linkWidth={0.4}
+              linkOpacity={0.45}
+              linkWidth={0.6}
               linkDirectionalParticles={(l: any) => {
                 // Highlight pulsed edges with travelling particles for 2.5s.
                 const sourceId = typeof l.source === 'object' ? l.source.id : l.source;
@@ -401,8 +508,20 @@ export function BrainView({ onClose }: { onClose: () => void }) {
               backgroundColor="#0a0a0e"
               onNodeClick={onNodeClick as any}
               onBackgroundClick={() => setSelected(null)}
-              cooldownTicks={120}
-              warmupTicks={20}
+              // Quality tuning: a settled small graph (memory-only) reaches
+              // its layout in ~6 seconds. Frozen mode = 0 ticks, no
+              // simulation; just render the last positions.
+              cooldownTicks={frozen ? 0 : 300}
+              cooldownTime={frozen ? 0 : 8000}
+              warmupTicks={frozen ? 0 : 60}
+              d3AlphaDecay={0.04}
+              d3VelocityDecay={0.55}
+              enableNodeDrag={!frozen}
+              onEngineStop={() => {
+                // After settling, fit-to-view once so the user lands on a
+                // composed brain instead of a corner of empty space.
+                if (fgRef.current && !frozen) fgRef.current.zoomToFit(600, 60);
+              }}
             />
           )}
         </div>
