@@ -19,49 +19,70 @@ The OS is target-independent. The connectors are target-specific.
 
 ```
         +-------------------------+
-        |   CONNECTED TARGET      |    Nik app · code repo · Obsidian · email · …
-        |   (the "world")         |
+        |   CONNECTED TARGET      |    app · repo · notes · email · calendar
         +-----------+-------------+
                     |
+                    | observed by
                     v
         +-------------------------+
-        |   CONNECTOR AGENTS      |    chat-listener · file-watcher · calendar
-        |   (target-specific,     |    email · code-repo · voice · …
-        |    ship with the OS)    |
+        |   CONNECTOR AGENTS      |    target-specific sensors / watchers
         +-----------+-------------+
                     |
-                    | emit findings
+                    | emit raw events / findings
                     v
         +-------------------------+
-        |   24 STORAGE LAYERS     |    findings · facts · register · wiki ·
-        |   (universal substrate) |    segments · revisions · runs · …
+        |   MEMORY SUBSTRATE      |    6 zones / 24 tables
+        |                         |    raw · structured · wiki · trust ·
+        |                         |    learning · run
         +-----------+-------------+
                     |
-                    | consolidated by
+                    | processed by
                     v
         +-------------------------+
-        |   CORE AGENTS           |    linker · consolidator · conflict-detector
-        |   (universal)           |    self-monitor · snapshotter
+        |   CORE MEMORY AGENTS    |    link · merge · verify · conflict ·
+        |                         |    decay · reinforce · promote
         +-----------+-------------+
                     |
-                    | promote to
+                    | promote stable memories to
                     v
         +-------------------------+
-        |   CELLS (the brain)     |    high-confidence neurons w/
-        |                         |    provenance + decay + multi-source
+        |   CELLS                 |    high-confidence · evidence-backed ·
+        |                         |    activatable neurons
         +-----------+-------------+
                     |
-                    | exposed via
+                    | governed by
                     v
         +-------------------------+
-        |   MCP SERVER            |    memory.cells.activate · recall · note · …
+        |   POLICY + PERMISSION   |    scopes · consent · privacy · audit
         +-----------+-------------+
                     |
+                    | exposed through
                     v
         +-------------------------+
-        |   CONSUMER              |    Nik chat · Claude Code · custom agent
+        |   MCP SERVER            |    activate · recall · explain · confirm
+        +-----------+-------------+
+                    |
+                    | consumed by
+                    v
+        +-------------------------+
+        |   CONSUMERS             |    Nik app · Claude Code · agents · workflows
         +-------------------------+
 ```
+
+### The 6 substrate zones
+
+The 24 tables/files cluster into 6 functional zones. Same physical layout; different mental model:
+
+| Zone | What lives here | Tables / files |
+|---|---|---|
+| **Raw** | append-only event streams; the unfiltered observation log | `findings`, `findings.jsonl`, daily archives |
+| **Structured** | the canonical entity catalog + graph | `register` (cells), `facts` (edges), `segments`, `hooks`, `graph.json` |
+| **Wiki** | synthesised prose + history | `wiki_pages`, `wiki_revisions`, `notebooks/`, `wiki/*.md` |
+| **Trust** | provenance, evidence, conflicts, source-independence | `provenance`, `conflicts`, `source_agents` arrays on cells/edges |
+| **Learning** | telemetry, summaries, promotion log, backups | `agent_runs`, `agent_summaries`, `promotions`, `snapshots/` |
+| **Run** | operational state, approvals, target artefacts | `notes`, `code_files` / `source_files`, `approvals`, target docs |
+
+Every zone has invariants the consolidator enforces: Raw is append-only; Structured stays referentially intact (no orphan edges); Wiki revisions never shrink; Trust grows monotonically; Learning rotates / prunes; Run is target-specific and policy-gated.
 
 ## The two pillar systems
 
@@ -233,6 +254,18 @@ Connectors **never** write directly to cells. They emit findings; the consolidat
 | `self-monitor` | 5 min | agent_runs, findings | agent_summaries |
 | `snapshotter` | 6 hr | DB | snapshots |
 
+## Policy + permission layer
+
+Every cell + every retrieval passes through this layer. Sits between the brain and the MCP server. Five responsibilities:
+
+1. **Authentication** — which consumer is asking? (Nik chat session, Claude Code session, autonomous agent, dashboard) Each gets a stable consumer-id.
+2. **Authorization** — does this consumer have access to this cell? Cells carry a `sensitivity_label` (`public` / `private` / `health` / `financial`); consumers carry `granted_scopes`. Activation filters at this layer, not at the SQL layer — so policy decisions are auditable.
+3. **Sensitivity gating** — health/financial/intimate cells are excluded by default; require explicit per-consumer grant. Connector consent flows live here too: an `email` connector requires per-folder consent, a `voice` connector requires per-source consent.
+4. **Audit log** — every retrieval is logged with `(consumer-id, query, cells_returned, sensitivity_levels, at)`. Read-only by default; tamper-evident hash chain optional.
+5. **Right to be forgotten** — tombstone records (not hard delete). Cells marked `tombstoned_at` are excluded from every retrieval; provenance traces preserved for audit; original content cleared from indexes.
+
+Without this layer, the OS is a memory leak waiting to happen for any personal-assistant target. With it, the OS can be deployed against sensitive data with a defensible answer to "where did this go and who saw it".
+
 ## MCP tool surface (consumer interface)
 
 ```
@@ -245,6 +278,18 @@ memory.recall({query, k=20, minConfidence=0.5})
 memory.note({text, scope?, kind?})
    → { cell_urn, importance }
 
+memory.explain({answer, anchor_cells?})
+   → { cells_supporting: [...], cells_contradicting: [...], confidence: 0.0-1.0 }
+   // given an answer (or a draft response), returns the cells that
+   // grounded it. Citation API. Verifies the "never claim without
+   // provenance" property at the consumer side.
+
+memory.confirm({urn, agent, evidence?})
+   → { cell_urn, importance_after, recall_count_after }
+   // explicit positive feedback: the consumer (often the user) confirms
+   // a cell is still true. Reinforces strength + bumps recall_count.
+   // First-class user-feedback signal, not a side effect of retrieval.
+
 memory.entities.get({urn})
 memory.entities.list({kind?, family?, segment?, limit?})
 
@@ -254,10 +299,11 @@ memory.conflicts.list({status: "open" | "all"})
 memory.conflicts.resolve({id, resolution})            // approval-gated
 
 memory.cells.invalidate({urn, reason})                 // approval-gated
-memory.cells.reinforce({urn, agent, evidence})         // appendable
+memory.cells.tombstone({urn, reason})                  // policy-gated; right-to-be-forgotten
 
 memory.connectors.list()
 memory.connectors.health()
+memory.audit.log({since?, consumer_id?})               // policy layer audit trail
 ```
 
 ## Smallest useful slice (week-1 milestone)
