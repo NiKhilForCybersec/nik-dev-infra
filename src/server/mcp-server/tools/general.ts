@@ -137,8 +137,8 @@ export async function callGeneralTool(name: string, args: Json): Promise<ToolRes
         `SELECT subject, predicate, object, agent, at FROM facts WHERE subject LIKE ? OR object LIKE ? OR predicate LIKE ? ORDER BY at DESC LIMIT ?`,
         [like, like, like, perLayer],
       );
-      const wikiHits = query<{ segment: string; topic: string; updated_at: number }>(
-        `SELECT segment, topic, updated_at FROM wiki WHERE topic LIKE ? OR body_md LIKE ? ORDER BY updated_at DESC LIMIT ?`,
+      const wikiHits = query<{ segment: string; topic: string; at: number }>(
+        `SELECT segment, topic, at FROM wiki_pages WHERE topic LIKE ? OR content LIKE ? ORDER BY at DESC LIMIT ?`,
         [like, like, perLayer],
       );
       const registerHits = query<{ urn: string; kind: string; label: string; segment: string | null; at: number }>(

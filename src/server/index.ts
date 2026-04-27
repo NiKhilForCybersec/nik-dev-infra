@@ -374,6 +374,131 @@ app.post<{ Params: { id: string }; Body: { decision: 'approved' | 'rejected'; no
 // capture script either timed out before paint or hit an error state.
 // We surface `isBlank: true` so the UI can show a "re-run" hint instead
 // of a useless white image.
+// POST /api/memory/note — UI's "drop a note" button. Same write path
+// as the MCP server's memory.note tool.
+app.post<{ Body: { text?: string; scope?: string; tags?: string[] } }>('/api/memory/note', async (req, reply) => {
+  const text = (req.body?.text ?? '').trim();
+  if (!text) {
+    reply.code(400);
+    return { error: 'text is required' };
+  }
+  const scope = req.body?.scope?.trim() || 'session';
+  const tags = Array.isArray(req.body?.tags) ? req.body!.tags!.filter((t): t is string => typeof t === 'string') : [];
+  const { addFact, registerEntity } = await import('./memory.ts');
+  const id = newId();
+  const urn = `note:${id}`;
+  registerEntity({
+    urn, kind: 'note', label: text.slice(0, 80),
+    agent: 'dashboard', segment: scope,
+    evidence: [text], confidence: 1.0,
+  });
+  addFact({
+    agent: 'dashboard',
+    subject: urn, predicate: 'note_in_scope', object: `scope:${scope}`,
+    evidence: [text], confidence: 1.0,
+  });
+  for (const tag of tags) {
+    addFact({
+      agent: 'dashboard',
+      subject: urn, predicate: 'tagged', object: `tag:${tag}`,
+      evidence: [text], confidence: 1.0,
+    });
+  }
+  return { ok: true, urn };
+});
+
+// REST: memory-ground feed — unified view across the memory layers.
+// Returns the most recent rows from notes / facts / wiki / register
+// (filtered + paginated server-side for cheap UI). The dashboard's
+// MEMORY GROUND panel polls this every 5s.
+app.get<{ Querystring: { layer?: string; query?: string; segment?: string; kind?: string; hours?: string; limit?: string } }>('/api/memory/feed', async (req) => {
+  const layer = req.query.layer ?? 'all';
+  const q = req.query.query?.trim() ?? '';
+  const segment = req.query.segment?.trim() ?? '';
+  const kind = req.query.kind?.trim() ?? '';
+  const hours = req.query.hours ? Number(req.query.hours) : null;
+  const limit = Math.min(Number(req.query.limit ?? 50), 200);
+  const sinceMs = hours && Number.isFinite(hours) ? Date.now() - hours * 60 * 60 * 1000 : 0;
+  const like = `%${q}%`;
+
+  type Row = { layer: string; at: number; primary: string; secondary: string; raw: Record<string, unknown> };
+  const rows: Row[] = [];
+
+  if (layer === 'all' || layer === 'notes') {
+    const conds = ['1=1'];
+    const params: unknown[] = [];
+    if (q) { conds.push('(key LIKE ? OR value_json LIKE ?)'); params.push(like, like); }
+    if (sinceMs > 0) { conds.push('at >= ?'); params.push(sinceMs); }
+    params.push(limit);
+    const r = query<{ agent: string; key: string; value_json: string; at: number }>(
+      `SELECT agent, key, value_json, at FROM notes WHERE ${conds.join(' AND ')} ORDER BY at DESC LIMIT ?`, params,
+    );
+    for (const x of r) rows.push({ layer: 'notes', at: x.at, primary: `${x.agent}/${x.key}`, secondary: x.value_json.slice(0, 200), raw: x });
+  }
+  if (layer === 'all' || layer === 'facts') {
+    const conds = ['1=1'];
+    const params: unknown[] = [];
+    if (q) { conds.push('(subject LIKE ? OR object LIKE ? OR predicate LIKE ?)'); params.push(like, like, like); }
+    if (sinceMs > 0) { conds.push('at >= ?'); params.push(sinceMs); }
+    params.push(limit);
+    const r = query<{ subject: string; predicate: string; object: string; agent: string; confidence: number; at: number }>(
+      `SELECT subject, predicate, object, agent, confidence, at FROM facts WHERE ${conds.join(' AND ')} ORDER BY at DESC LIMIT ?`, params,
+    );
+    for (const x of r) rows.push({ layer: 'facts', at: x.at, primary: `${x.subject} —${x.predicate}→ ${x.object}`, secondary: `agent: ${x.agent} · conf: ${x.confidence}`, raw: x });
+  }
+  if (layer === 'all' || layer === 'wiki') {
+    const conds = ['1=1'];
+    const params: unknown[] = [];
+    if (q) { conds.push('(topic LIKE ? OR content LIKE ?)'); params.push(like, like); }
+    if (segment) { conds.push('segment = ?'); params.push(segment); }
+    if (sinceMs > 0) { conds.push('at >= ?'); params.push(sinceMs); }
+    params.push(limit);
+    const r = query<{ segment: string; topic: string; content: string; at: number }>(
+      `SELECT segment, topic, content, at FROM wiki_pages WHERE ${conds.join(' AND ')} ORDER BY at DESC LIMIT ?`, params,
+    );
+    for (const x of r) rows.push({ layer: 'wiki', at: x.at, primary: `${x.segment}/${x.topic}`, secondary: x.content.slice(0, 200), raw: x });
+  }
+  if (layer === 'all' || layer === 'register') {
+    const conds = ['1=1'];
+    const params: unknown[] = [];
+    if (q) { conds.push('(urn LIKE ? OR label LIKE ?)'); params.push(like, like); }
+    if (segment) { conds.push('segment = ?'); params.push(segment); }
+    if (kind) { conds.push('kind = ?'); params.push(kind); }
+    if (sinceMs > 0) { conds.push('at >= ?'); params.push(sinceMs); }
+    params.push(limit);
+    const r = query<{ urn: string; kind: string; label: string; segment: string | null; agent: string; confidence: number; at: number; file: string | null }>(
+      `SELECT urn, kind, label, segment, agent, confidence, at, file FROM register WHERE ${conds.join(' AND ')} ORDER BY at DESC LIMIT ?`, params,
+    );
+    for (const x of r) rows.push({ layer: 'register', at: x.at, primary: `${x.kind}: ${x.label}`, secondary: `${x.urn}${x.segment ? ` · ${x.segment}` : ''} · conf ${x.confidence}`, raw: x });
+  }
+  if (layer === 'all' || layer === 'approvals') {
+    const conds = ["status = 'pending'"];
+    const params: unknown[] = [];
+    if (q) { conds.push('payload_json LIKE ?'); params.push(like); }
+    if (sinceMs > 0) { conds.push('created_at >= ?'); params.push(sinceMs); }
+    params.push(limit);
+    const r = query<{ id: string; agent: string; kind: string; created_at: number; payload_json: string }>(
+      `SELECT id, agent, kind, created_at, payload_json FROM approvals WHERE ${conds.join(' AND ')} ORDER BY created_at DESC LIMIT ?`, params,
+    );
+    for (const x of r) rows.push({ layer: 'approvals', at: x.created_at, primary: `${x.kind} (${x.id.slice(0, 8)})`, secondary: `${x.agent} · pending decision`, raw: x });
+  }
+
+  // Merge + sort + cap.
+  rows.sort((a, b) => b.at - a.at);
+  const capped = rows.slice(0, limit);
+
+  // Layer counts (over the unfiltered window) for the UI's filter chips.
+  const counts = {
+    notes: query<{ n: number }>(`SELECT COUNT(*) AS n FROM notes`)[0]?.n ?? 0,
+    facts: query<{ n: number }>(`SELECT COUNT(*) AS n FROM facts`)[0]?.n ?? 0,
+    wiki: query<{ n: number }>(`SELECT COUNT(*) AS n FROM wiki_pages`)[0]?.n ?? 0,
+    register: query<{ n: number }>(`SELECT COUNT(*) AS n FROM register`)[0]?.n ?? 0,
+    approvals_pending: query<{ n: number }>(`SELECT COUNT(*) AS n FROM approvals WHERE status='pending'`)[0]?.n ?? 0,
+  };
+
+  return { rows: capped.map((r) => ({ ...r, at_iso: new Date(r.at).toISOString() })), counts };
+});
+
 // REST: per-module intent summaries from the knowledge graph
 // (codebase-graph + intent-extractor agents). Returns the parsed
 // "purpose" sentence — a short, hover-displayable string. Modules

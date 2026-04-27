@@ -5,6 +5,7 @@ import { BootstrapProgress } from './BootstrapProgress';
 import { EntitiesPanel } from './EntitiesPanel';
 import { GraphPanel } from './GraphPanel';
 import { GraphPlayground } from './GraphPlayground';
+import { MemoryGround } from './MemoryGround';
 import { ScreensGallery } from './ScreensGallery';
 import { SetupWizard } from './SetupWizard';
 
@@ -75,6 +76,7 @@ export function App() {
   const [screensOpen, setScreensOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [autoFixOpen, setAutoFixOpen] = useState(false);
+  const [memoryGroundOpen, setMemoryGroundOpen] = useState(false);
   // Per-agent in-flight tracking so the manual "run" button shows visible
   // pending state instead of fire-and-forget. Cleared when the next `run`
   // event for that agent arrives over WebSocket.
@@ -254,6 +256,11 @@ export function App() {
             className="mono"
             style={{ padding: '4px 10px', fontSize: 10, letterSpacing: 1, color: 'var(--accent)', borderColor: 'var(--accent)' }}
           >AUTO-FIX</button>
+          <button
+            onClick={() => setMemoryGroundOpen(true)}
+            className="mono"
+            style={{ padding: '4px 10px', fontSize: 10, letterSpacing: 1, color: 'var(--accent)', borderColor: 'var(--accent)' }}
+          >MEMORY</button>
           <div className="mono" style={{ fontSize: 11, color: connected ? 'var(--ok)' : 'var(--err)', display: 'flex', alignItems: 'center', gap: 8 }}>
             <span
               className={livePulse ? 'live-pulse' : ''}
@@ -452,6 +459,7 @@ export function App() {
       {screensOpen && <ScreensGallery onClose={() => setScreensOpen(false)} />}
       {setupOpen && <SetupWizard onClose={() => setSetupOpen(false)} />}
       {autoFixOpen && <AutoFixPanel onClose={() => setAutoFixOpen(false)} />}
+      {memoryGroundOpen && <MemoryGround onClose={() => setMemoryGroundOpen(false)} />}
     </div>
   );
 }
