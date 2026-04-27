@@ -302,6 +302,9 @@ const RULES: Record<string, Rule> = {
   'registry:summary':           rule_skip('internal — registry digest'),
   'graph:built':                rule_skip('internal — graph build digest'),
   'graph:no-source':            rule_skip('internal — no source to graph'),
+  'codebase-graph:summary':         rule_skip('internal — AST extraction digest'),
+  'codebase-graph:no-source':       rule_skip('internal — no source to parse'),
+  'codebase-graph:tree-sitter-missing': rule_skip('internal — native binding setup'),
   // Health: only health:down promotes (via rule_healthDownStable above);
   // up/degraded/summary stay on the dashboard, not in Concerns.md.
   'health:up':                  rule_skip('green status — not a concern'),

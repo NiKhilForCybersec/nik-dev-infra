@@ -234,6 +234,14 @@ export const AutoFixDriverFindingSchema = Base.extend({
   ]),
 });
 
+export const CodebaseGraphFindingSchema = Base.extend({
+  kind: z.enum([
+    'codebase-graph:summary',
+    'codebase-graph:no-source',
+    'codebase-graph:tree-sitter-missing',
+  ]),
+});
+
 export const ScreenProberFindingSchema = Base.extend({
   kind: z.enum([
     'screen-prober:run-complete',
@@ -354,6 +362,7 @@ export const SCHEMA_BY_AGENT = {
   screenshots: ScreenshotsFindingSchema,
   'screen-validator': ScreenValidatorFindingSchema,
   'screen-prober': ScreenProberFindingSchema,
+  'codebase-graph': CodebaseGraphFindingSchema,
   'auto-fix-driver': AutoFixDriverFindingSchema,
   snapshotter: SnapshotterFindingSchema,
   curator: CuratorFindingSchema,

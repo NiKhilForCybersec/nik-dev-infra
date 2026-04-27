@@ -196,6 +196,20 @@ db.exec(`
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (agent, segment)
   );
+
+  -- Code-graph file cache (codebase-graph agent). Per-file SHA so the
+  -- next AST pass can skip unchanged files instead of re-parsing the
+  -- whole repo every cycle. The intent_summary column holds the
+  -- LLM-extracted "why this file exists" string when the intent agent
+  -- has run; null otherwise.
+  CREATE TABLE IF NOT EXISTS code_files (
+    path           TEXT PRIMARY KEY,
+    sha256         TEXT NOT NULL,
+    parsed_at      INTEGER NOT NULL,
+    intent_summary TEXT,
+    intent_at      INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_code_files_parsed_at ON code_files(parsed_at DESC);
 `);
 
 const WIKI_DIR = resolve(DATA_DIR, 'wiki');
@@ -762,4 +776,43 @@ const sqliteVacuum = db.prepare('VACUUM');
  *  memory-keeper schedules it sparingly. */
 export function vacuum(): void {
   sqliteVacuum.run();
+}
+
+// ─── code_files cache (codebase-graph agent) ─────────────────────────────
+
+const upsertCodeFile = db.prepare(`
+  INSERT INTO code_files (path, sha256, parsed_at, intent_summary, intent_at)
+    VALUES (?, ?, ?, NULL, NULL)
+  ON CONFLICT(path) DO UPDATE SET
+    sha256    = excluded.sha256,
+    parsed_at = excluded.parsed_at
+`);
+const selectCodeFile = db.prepare<[string]>('SELECT path, sha256, parsed_at, intent_summary, intent_at FROM code_files WHERE path = ?');
+const setCodeFileIntent = db.prepare<[string, number, string]>(`
+  UPDATE code_files SET intent_summary = ?, intent_at = ? WHERE path = ?
+`);
+
+export type CodeFileRecord = {
+  path: string;
+  sha256: string;
+  parsed_at: number;
+  intent_summary: string | null;
+  intent_at: number | null;
+};
+
+/** Look up the cached parse record for a file. Returns null if never parsed. */
+export function getCodeFile(path: string): CodeFileRecord | null {
+  const r = selectCodeFile.get(path) as CodeFileRecord | undefined;
+  return r ?? null;
+}
+
+/** Record that a file was parsed at the given content hash. Skips updating
+ *  intent fields — those are owned by the intent agent. */
+export function recordCodeFileParse(path: string, sha256: string, parsedAt = Date.now()): void {
+  upsertCodeFile.run(path, sha256, parsedAt);
+}
+
+/** Update the intent summary for a previously-parsed file. */
+export function recordCodeFileIntent(path: string, summary: string, intentAt = Date.now()): void {
+  setCodeFileIntent.run(summary, intentAt, path);
 }
