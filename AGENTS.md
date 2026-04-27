@@ -1,5 +1,7 @@
 # nik-dev-infra · agent project context
 
+> 🧠 **Read [docs/BRAIN.md](docs/BRAIN.md) before any memory / agent / UI work.** It is the primary engineering reference for the brain vision: the 24 storage layers, the neuron schema, the activation primitive, and the autonomous consolidator loop. This `AGENTS.md` covers the existing agent runtime; `BRAIN.md` covers where it's heading.
+
 This directory is **dev infrastructure for the Nik app** at `~/NIK/`. It runs an always-on Node daemon that watches the Nik codebase, spawns parallel `claude -p` agent calls on file changes, and surfaces findings to a live React console at http://localhost:5174.
 
 ## Sibling, not parent
