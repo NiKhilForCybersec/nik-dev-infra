@@ -64,6 +64,9 @@ export function App() {
   const [connected, setConnected] = useState(false);
   const [filterAgent, setFilterAgent] = useState<string>('all');
   const [filterSev, setFilterSev] = useState<'all' | Severity>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [timeRange, setTimeRange] = useState<'all' | '1h' | '24h' | '7d'>('all');
+  const [groupByFile, setGroupByFile] = useState(false);
   const [lastLiveAt, setLastLiveAt] = useState<number | null>(null);
   const [liveCount, setLiveCount] = useState(0);
   const [graphOpen, setGraphOpen] = useState(false);
@@ -138,12 +141,37 @@ export function App() {
   }, []);
 
   const filtered = useMemo(() => {
+    const now = Date.now();
+    const windowMs = timeRange === '1h' ? 60 * 60 * 1000
+      : timeRange === '24h' ? 24 * 60 * 60 * 1000
+      : timeRange === '7d' ? 7 * 24 * 60 * 60 * 1000
+      : Number.POSITIVE_INFINITY;
+    const q = searchQuery.trim().toLowerCase();
     return findings
       .filter((f) => filterAgent === 'all' || f.agent === filterAgent)
       .filter((f) => filterSev === 'all' || f.severity === filterSev)
+      .filter((f) => (now - f.at) <= windowMs)
+      .filter((f) => !q
+        || f.summary.toLowerCase().includes(q)
+        || (f.file ?? '').toLowerCase().includes(q)
+        || f.kind.toLowerCase().includes(q))
       .slice()
       .reverse();
-  }, [findings, filterAgent, filterSev]);
+  }, [findings, filterAgent, filterSev, timeRange, searchQuery]);
+
+  // Group-by-file: build a Map<file-or-noFile, Finding[]> over the
+  // already-filtered list. Order preserved (insertion = filtered order).
+  const grouped = useMemo(() => {
+    if (!groupByFile) return null;
+    const m = new Map<string, Finding[]>();
+    for (const f of filtered) {
+      const key = f.file ?? '(no file)';
+      const list = m.get(key) ?? [];
+      list.push(f);
+      m.set(key, list);
+    }
+    return [...m.entries()];
+  }, [filtered, groupByFile]);
 
   const counts = useMemo(() => {
     const out: Record<string, { info: number; warn: number; error: number; total: number }> = {};
@@ -325,7 +353,8 @@ export function App() {
 
         {/* Right: findings stream */}
         <div style={{ padding: 14, overflowY: 'auto' }}>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+          {/* Row 1: severity + count */}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: 1.5 }}>SEVERITY</span>
             {(['all', 'error', 'warn', 'info'] as const).map((s) => (
               <button
@@ -344,14 +373,58 @@ export function App() {
               {filtered.length} / {findings.length} findings
             </span>
           </div>
+          {/* Row 2: search + time-range + group-by-file */}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input
+              type="search"
+              placeholder="search summary / file / kind…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="mono"
+              style={{ flex: 1, minWidth: 200, padding: '4px 8px', fontSize: 11 }}
+            />
+            <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: 1.5 }}>WINDOW</span>
+            {(['1h', '24h', '7d', 'all'] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTimeRange(t)}
+                className="mono"
+                style={{
+                  padding: '3px 8px', fontSize: 10, letterSpacing: 0.5,
+                  background: timeRange === t ? 'var(--accent-soft)' : 'transparent',
+                  borderColor: timeRange === t ? 'var(--accent)' : 'var(--hairline)',
+                  color: timeRange === t ? 'var(--accent)' : 'var(--fg-2)',
+                }}
+              >{t === 'all' ? 'ALL' : t.toUpperCase()}</button>
+            ))}
+            <button
+              onClick={() => setGroupByFile((g) => !g)}
+              className="mono"
+              title={groupByFile ? 'showing one row per file (click to ungroup)' : 'group findings by file'}
+              style={{
+                padding: '3px 8px', fontSize: 10, letterSpacing: 0.5,
+                background: groupByFile ? 'var(--accent-soft)' : 'transparent',
+                borderColor: groupByFile ? 'var(--accent)' : 'var(--hairline)',
+                color: groupByFile ? 'var(--accent)' : 'var(--fg-2)',
+              }}
+            >GROUP BY FILE</button>
+          </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {filtered.map((f) => <FindingRow key={f.id} f={f} />)}
+            {grouped ? (
+              grouped.map(([file, items]) => (
+                <FindingGroup key={file} file={file} items={items} />
+              ))
+            ) : (
+              filtered.map((f) => <FindingRow key={f.id} f={f} />)
+            )}
             {filtered.length === 0 && (
               <div className="glass" style={{ padding: 24, textAlign: 'center' }}>
                 <div className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: 1 }}>NO FINDINGS</div>
                 <div style={{ fontSize: 12, color: 'var(--fg-2)', marginTop: 8 }}>
-                  Edit a file under <code className="mono">~/NIK/web/src/</code> and watch the agents fire.
+                  {searchQuery || timeRange !== 'all' || filterAgent !== 'all' || filterSev !== 'all'
+                    ? 'No findings match your current filters.'
+                    : <>Edit a file under <code className="mono">~/NIK/web/src/</code> and watch the agents fire.</>}
                 </div>
               </div>
             )}
@@ -448,6 +521,42 @@ function AgentChip(props: {
               }}
             >{props.pending ? 'running…' : 'run'}</button>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FindingGroup({ file, items }: { file: string; items: Finding[] }) {
+  const [open, setOpen] = useState(true);
+  const errCount = items.filter((f) => f.severity === 'error').length;
+  const warnCount = items.filter((f) => f.severity === 'warn').length;
+  const sev: Severity = errCount > 0 ? 'error' : warnCount > 0 ? 'warn' : 'info';
+  return (
+    <div className="glass" style={{ borderLeft: `3px solid ${SEV_COLOR[sev]}` }}>
+      <div
+        onClick={() => setOpen((o) => !o)}
+        style={{ padding: '8px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
+      >
+        <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', width: 10 }}>{open ? '▾' : '▸'}</span>
+        <span className="mono" style={{ fontSize: 11, color: 'var(--fg)', flex: 1, wordBreak: 'break-all' }}>{file}</span>
+        <span className="mono" style={{ fontSize: 9, color: 'var(--fg-3)' }}>
+          {errCount > 0 && <span style={{ color: 'var(--err)' }}>{errCount}e </span>}
+          {warnCount > 0 && <span style={{ color: 'var(--warn)' }}>{warnCount}w </span>}
+          {items.length} total
+        </span>
+      </div>
+      {open && (
+        <div style={{ padding: '0 10px 10px 22px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {items.map((f) => (
+            <div key={f.id} style={{ borderLeft: `2px solid ${SEV_COLOR[f.severity]}`, paddingLeft: 8 }}>
+              <div className="mono" style={{ fontSize: 9, color: 'var(--fg-3)' }}>
+                <span style={{ color: SEV_COLOR[f.severity] }}>{f.severity.toUpperCase()}</span>
+                {' · '}{f.agent}/{f.kind} · {ago(f.at)}{f.line ? ` · L${f.line}` : ''}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--fg)', marginTop: 2 }}>{f.summary}</div>
+            </div>
+          ))}
         </div>
       )}
     </div>
