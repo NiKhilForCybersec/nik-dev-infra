@@ -316,37 +316,48 @@ export function BrainView({ onClose }: { onClose: () => void }) {
     fgRef.current.zoom(2.5, 800);
   };
 
-  // Custom canvas node renderer — circle + optional pulse halo +
-  // optional always-on label. Hover-dim non-focused nodes.
+  // Custom canvas node renderer — runs AFTER the library's default
+  // circle (nodeCanvasObjectMode=after below) so the brain always
+  // renders SOMETHING even if our custom layer breaks. We add: hover
+  // halo, selection ring, optional always-on label.
   const drawNode = (node: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
-    if (node.x == null || node.y == null) return;
+    if (typeof node.x !== 'number' || typeof node.y !== 'number') return;
     const focused = isFocused(node.id);
     const pulse = pulses.find((p) => p.nodeId === node.id);
 
-    // Pulse halo first so it sits behind the sphere.
+    // Pulse halo (behind the default circle visually since we're "after").
     if (pulse) {
       ctx.beginPath();
       ctx.arc(node.x, node.y, node.size * 2.2, 0, 2 * Math.PI);
       ctx.fillStyle = node.baseColor;
+      const prevAlpha = ctx.globalAlpha;
       ctx.globalAlpha = 0.18 * pulse.intensity;
       ctx.fill();
-      ctx.globalAlpha = 1;
+      ctx.globalAlpha = prevAlpha;
     }
 
-    ctx.beginPath();
-    ctx.arc(node.x, node.y, node.size, 0, 2 * Math.PI);
-    ctx.fillStyle = node.baseColor;
-    ctx.globalAlpha = focused ? 1 : 0.18;
-    ctx.fill();
+    // Selection ring on top of the default circle.
     if (selected?.id === node.id) {
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, node.size + 2, 0, 2 * Math.PI);
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 2 / globalScale;
       ctx.stroke();
     }
-    ctx.globalAlpha = 1;
 
-    // Label: always-on when toggle is set + zoomed in enough, OR when
-    // hovered, OR when selected.
+    // Hover dim: paint a dark veil over non-focused nodes (since the
+    // default circle already drew, we tint over it instead of skipping).
+    if (!focused) {
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, node.size + 0.5, 0, 2 * Math.PI);
+      ctx.fillStyle = '#0a0a0e';
+      const prevAlpha = ctx.globalAlpha;
+      ctx.globalAlpha = 0.7;
+      ctx.fill();
+      ctx.globalAlpha = prevAlpha;
+    }
+
+    // Label: always-on when toggle + zoomed in, hovered, OR selected.
     const showThisLabel = (showLabels && globalScale > 0.6) || hoveredId === node.id || selected?.id === node.id;
     if (showThisLabel && focused) {
       const fontSize = Math.max(8, 12 / globalScale);
@@ -487,16 +498,14 @@ export function BrainView({ onClose }: { onClose: () => void }) {
               height={containerSize.h}
               graphData={data}
               backgroundColor="#0a0a0e"
-              nodeRelSize={1}
+              // Tell react-force-graph to use sane defaults for size +
+              // colour, then layer my custom drawer ON TOP — so even if
+              // my code throws, the lib still draws the basic circles.
+              nodeRelSize={4}
+              nodeVal={(n: any) => (n as GraphNode).size ?? 4}
+              nodeColor={(n: any) => (n as GraphNode).baseColor ?? '#888'}
               nodeCanvasObject={(n: any, ctx: any, scale: any) => drawNode(n as GraphNode, ctx, scale)}
-              nodePointerAreaPaint={(n: any, color: any, ctx: any) => {
-                const node = n as GraphNode;
-                if (node.x == null || node.y == null) return;
-                ctx.beginPath();
-                ctx.arc(node.x, node.y, node.size + 2, 0, 2 * Math.PI);
-                ctx.fillStyle = color;
-                ctx.fill();
-              }}
+              nodeCanvasObjectMode={() => 'after'}
               linkColor={linkColor as any}
               linkWidth={(l: any) => {
                 const sId = typeof l.source === 'object' ? l.source.id : l.source;
