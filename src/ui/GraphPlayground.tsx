@@ -47,13 +47,16 @@ const EDGE_COLOR: Record<EdgeKind, string> = {
   renders:      '#a4c4ff',
 };
 
-type Status = 'ok' | 'warn' | 'error' | 'unknown';
+type Status = 'ok' | 'warn' | 'error' | 'orphan' | 'silent' | 'unknown';
 const STATUS_COLOR: Record<Status, string> = {
   ok:      '#5fd49a',
   warn:    '#ffd166',
   error:   '#ff6b6b',
+  orphan:  '#c389ff',
+  silent:  '#7a7a8c',
   unknown: '#555568',
 };
+const SILENT_THRESHOLD_MS = 24 * 60 * 60 * 1000;     // 24h with no activity = silent
 
 export function GraphPlayground({ onClose }: { onClose: () => void }) {
   const cyRef = useRef<HTMLDivElement | null>(null);
@@ -65,6 +68,7 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
   const [filter, setFilter] = useState('');
   const [selectedTypes, setSelectedTypes] = useState<Set<NodeType>>(new Set(Object.keys(NODE_COLOR) as NodeType[]));
   const [selected, setSelected] = useState<{ id: string; entity?: Entity; touching: Finding[] } | null>(null);
+  const [hover, setHover] = useState<{ id: string; x: number; y: number } | null>(null);
 
   // Load all three feeds in parallel.
   useEffect(() => {
@@ -84,9 +88,15 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
       .catch((e) => setError((e as Error).message));
   }, []);
 
-  // Per-URN status: error if any error finding mentions the URN's file or label;
-  // warn if any warn finding does; unknown otherwise. Hard-path: unknown stays
-  // unknown — we don't paint green by default.
+  // Per-URN status — hard-path priority order:
+  //   error  : any error finding hits the URN's file
+  //   warn   : any warn finding hits the URN's file
+  //   orphan : 0 in-edges AND 0 out-edges (the registry knows about it but
+  //            nothing wires to/from it — that's a real concern)
+  //   silent : has edges but no entity activity in the last 24h (the system
+  //            forgot about it; could be stale code or missing instrumentation)
+  //   ok     : has edges + recent activity + no findings (positive evidence)
+  //   unknown: missing the data needed to judge — never paint green by default
   const statusByUrn = useMemo<Map<string, Status>>(() => {
     const m = new Map<string, Status>();
     if (!graph) return m;
@@ -99,15 +109,26 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
       else cur.i++;
       byFile.set(f.file, cur);
     }
+    const inDeg = new Map<string, number>();
+    const outDeg = new Map<string, number>();
+    for (const e of graph.edges) {
+      outDeg.set(e.from, (outDeg.get(e.from) ?? 0) + 1);
+      inDeg.set(e.to, (inDeg.get(e.to) ?? 0) + 1);
+    }
+    const now = Date.now();
     for (const n of graph.nodes) {
       const ent = entities.find((x) => x.urn === n.id);
       const file = n.file ?? ent?.file ?? null;
-      if (!file) { m.set(n.id, 'unknown'); continue; }
-      const c = byFile.get(file);
-      if (!c) { m.set(n.id, 'unknown'); continue; }
-      if (c.e > 0) m.set(n.id, 'error');
-      else if (c.w > 0) m.set(n.id, 'warn');
-      else m.set(n.id, 'ok');
+      const c = file ? byFile.get(file) : undefined;
+      if (c?.e) { m.set(n.id, 'error'); continue; }
+      if (c?.w) { m.set(n.id, 'warn'); continue; }
+      const inD = inDeg.get(n.id) ?? 0;
+      const outD = outDeg.get(n.id) ?? 0;
+      if (inD === 0 && outD === 0) { m.set(n.id, 'orphan'); continue; }
+      if (!ent) { m.set(n.id, 'unknown'); continue; }
+      if (now - ent.at > SILENT_THRESHOLD_MS) { m.set(n.id, 'silent'); continue; }
+      if (file && c) { m.set(n.id, 'ok'); continue; }
+      m.set(n.id, 'unknown');
     }
     return m;
   }, [graph, findings, entities]);
@@ -205,6 +226,24 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
       cyInstance.current.on('tap', (evt) => {
         if (evt.target === cyInstance.current) setSelected(null);
       });
+      // Hover tooltip — track the rendered (canvas) position so the
+      // overlay div can be positioned over the cytoscape container.
+      cyInstance.current.on('mouseover', 'node', (evt) => {
+        const id = evt.target.id() as string;
+        const pos = evt.target.renderedPosition();
+        setHover({ id, x: pos.x, y: pos.y });
+      });
+      cyInstance.current.on('mouseout', 'node', () => setHover(null));
+      // Keep the tooltip glued to the node when the user pans / zooms.
+      cyInstance.current.on('pan zoom', () => {
+        setHover((prev) => {
+          if (!prev || !cyInstance.current) return prev;
+          const node = cyInstance.current.getElementById(prev.id);
+          if (!node || node.empty()) return null;
+          const pos = node.renderedPosition();
+          return { id: prev.id, x: pos.x, y: pos.y };
+        });
+      });
     }
     const cy = cyInstance.current;
     cy.elements().remove();
@@ -242,15 +281,42 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
   }, [graph]);
 
   const statusCounts = useMemo(() => {
-    let ok = 0, warn = 0, err = 0, unk = 0;
+    let ok = 0, warn = 0, err = 0, orphan = 0, silent = 0, unk = 0;
     for (const s of statusByUrn.values()) {
       if (s === 'ok') ok++;
       else if (s === 'warn') warn++;
       else if (s === 'error') err++;
+      else if (s === 'orphan') orphan++;
+      else if (s === 'silent') silent++;
       else unk++;
     }
-    return { ok, warn, err, unk };
+    return { ok, warn, err, orphan, silent, unk };
   }, [statusByUrn]);
+
+  // Rich detail for the hover tooltip — derived once per (hovered id) change.
+  const hoverDetail = useMemo(() => {
+    if (!hover || !graph) return null;
+    const node = graph.nodes.find((n) => n.id === hover.id);
+    if (!node) return null;
+    const ent = entities.find((e) => e.urn === hover.id);
+    const file = node.file ?? ent?.file ?? null;
+    const inEdges = graph.edges.filter((e) => e.to === hover.id);
+    const outEdges = graph.edges.filter((e) => e.from === hover.id);
+    const touching = file ? findings.filter((f) => f.file === file) : [];
+    const errCount = touching.filter((f) => f.severity === 'error').length;
+    const warnCount = touching.filter((f) => f.severity === 'warn').length;
+    return {
+      node,
+      ent,
+      status: statusByUrn.get(hover.id) ?? 'unknown',
+      file,
+      inDeg: inEdges.length,
+      outDeg: outEdges.length,
+      errCount,
+      warnCount,
+      lastTouchAgo: ent ? Math.round((Date.now() - ent.at) / 1000) : null,
+    };
+  }, [hover, graph, entities, findings, statusByUrn]);
 
   return (
     <div style={{
@@ -297,6 +363,8 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
           <span style={{ color: STATUS_COLOR.ok }}>● ok {statusCounts.ok}</span>
           <span style={{ color: STATUS_COLOR.warn }}>● warn {statusCounts.warn}</span>
           <span style={{ color: STATUS_COLOR.error }}>● err {statusCounts.err}</span>
+          <span style={{ color: STATUS_COLOR.orphan }}>● orphan {statusCounts.orphan}</span>
+          <span style={{ color: STATUS_COLOR.silent }}>● silent {statusCounts.silent}</span>
           <span style={{ color: STATUS_COLOR.unknown }}>● unknown {statusCounts.unk}</span>
           <button onClick={onClose} className="mono" style={{ padding: '4px 10px', fontSize: 12 }}>×</button>
         </div>
@@ -307,7 +375,57 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
       )}
 
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-        <div ref={cyRef} style={{ flex: 1, background: 'var(--bg)' }} />
+        <div style={{ flex: 1, position: 'relative' }}>
+          <div ref={cyRef} style={{ position: 'absolute', inset: 0, background: 'var(--bg)' }} />
+          {hover && hoverDetail && (
+            <div
+              className="glass"
+              style={{
+                position: 'absolute',
+                left: Math.min(hover.x + 16, (cyRef.current?.clientWidth ?? 800) - 280),
+                top: Math.max(hover.y - 8, 8),
+                width: 260,
+                padding: 10,
+                pointerEvents: 'none',
+                zIndex: 5,
+                fontSize: 11,
+                background: 'rgba(10, 10, 14, 0.92)',
+                borderColor: STATUS_COLOR[hoverDetail.status],
+              }}
+            >
+              <div className="mono" style={{ fontSize: 9, color: STATUS_COLOR[hoverDetail.status], letterSpacing: 1.5, marginBottom: 4 }}>
+                {hoverDetail.node.type.toUpperCase()} · {hoverDetail.status.toUpperCase()}
+              </div>
+              <div className="mono" style={{ fontSize: 12, color: 'var(--fg)', wordBreak: 'break-all', marginBottom: 6 }}>
+                {hoverDetail.node.label}
+              </div>
+              {hoverDetail.file && (
+                <div className="mono" style={{ fontSize: 10, color: 'var(--fg-2)', marginBottom: 4, wordBreak: 'break-all' }}>
+                  {hoverDetail.file}
+                </div>
+              )}
+              {hoverDetail.ent?.segment && (
+                <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', marginBottom: 4 }}>
+                  segment: <span style={{ color: 'var(--fg-2)' }}>{hoverDetail.ent.segment}</span>
+                </div>
+              )}
+              <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', display: 'flex', gap: 10, marginTop: 6 }}>
+                <span>in:{hoverDetail.inDeg}</span>
+                <span>out:{hoverDetail.outDeg}</span>
+                {hoverDetail.errCount > 0 && <span style={{ color: 'var(--err)' }}>{hoverDetail.errCount}e</span>}
+                {hoverDetail.warnCount > 0 && <span style={{ color: 'var(--warn)' }}>{hoverDetail.warnCount}w</span>}
+                {hoverDetail.ent && (
+                  <span>conf:{Math.round(hoverDetail.ent.confidence * 100)}%</span>
+                )}
+              </div>
+              {hoverDetail.lastTouchAgo !== null && (
+                <div className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', marginTop: 4 }}>
+                  touched {hoverDetail.lastTouchAgo < 60 ? `${hoverDetail.lastTouchAgo}s` : hoverDetail.lastTouchAgo < 3600 ? `${Math.round(hoverDetail.lastTouchAgo / 60)}m` : hoverDetail.lastTouchAgo < 86400 ? `${Math.round(hoverDetail.lastTouchAgo / 3600)}h` : `${Math.round(hoverDetail.lastTouchAgo / 86400)}d`} ago
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Side panel: selected entity drill-down */}
         {selected && (
