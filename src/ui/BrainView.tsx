@@ -207,30 +207,10 @@ export function BrainView({ onClose }: { onClose: () => void }) {
     return () => clearInterval(id);
   }, []);
 
-  // Ambient pulse — every ~4s, pick a random visible node and pulse it
-  // briefly. Makes the brain feel ALIVE even when no real findings are
-  // arriving. Subtle (intensity 0.3) so it reads as background activity,
-  // not noise.
-  useEffect(() => {
-    const id = setInterval(() => {
-      if (data.nodes.length === 0) return;
-      const node = data.nodes[Math.floor(Math.random() * data.nodes.length)]!;
-      setPulses((prev) => [...prev, { nodeId: node.id, until: Date.now() + 1500, intensity: 0.3 }]);
-    }, 4_000);
-    return () => clearInterval(id);
-  }, [data.nodes.length]);
-
-  // Reheat the simulation periodically so it never fully settles —
-  // gives the layout a gentle continuous drift like Obsidian. Without
-  // this it crystallizes after the cooldown and feels static.
-  useEffect(() => {
-    const id = setInterval(() => {
-      if (fgRef.current && (fgRef.current as any).d3ReheatSimulation) {
-        (fgRef.current as any).d3ReheatSimulation(0.05);
-      }
-    }, 8_000);
-    return () => clearInterval(id);
-  }, []);
+  // Ambient pulse + reheat — both moved below the `data` useMemo to
+  // avoid the TDZ (referencing data before its const declaration
+  // crashes BrainView entirely). See ambientPulseEffect / reheatEffect
+  // farther down.
 
   // Build the graph data. Filter by scope + search + hidden kinds.
   const data = useMemo(() => {
@@ -280,6 +260,28 @@ export function BrainView({ onClose }: { onClose: () => void }) {
   }, [graph, filter, hiddenKinds, concernStatus, scope]);
 
   // Adjacency map for hover-highlight (Obsidian style: focus the
+  // Ambient pulse — every ~4s, pick a random visible node and pulse
+  // briefly. Makes the brain feel ALIVE even when no real findings
+  // arrive. Subtle (intensity 0.3) so it reads as background activity.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (data.nodes.length === 0) return;
+      const node = data.nodes[Math.floor(Math.random() * data.nodes.length)]!;
+      setPulses((prev) => [...prev, { nodeId: node.id, until: Date.now() + 1500, intensity: 0.3 }]);
+    }, 4_000);
+    return () => clearInterval(id);
+  }, [data.nodes.length]);
+
+  // Reheat the simulation periodically so it never fully settles —
+  // gentle continuous drift like Obsidian.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const fg = fgRef.current as any;
+      if (fg?.d3ReheatSimulation) fg.d3ReheatSimulation();
+    }, 8_000);
+    return () => clearInterval(id);
+  }, []);
+
   // hovered node + its 1-hop neighbourhood, dim everything else).
   const adjacency = useMemo(() => {
     const m = new Map<string, Set<string>>();
