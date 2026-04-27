@@ -27,10 +27,15 @@ import { recordFinding, recordRun } from './memory.ts';
 import type { AgentRun, Finding } from './types.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-// DATA_DIR can be overridden for tests / sandboxing via DEV_INFRA_DATA_DIR.
-const DATA_DIR = process.env.DEV_INFRA_DATA_DIR
-  ? resolve(process.env.DEV_INFRA_DATA_DIR)
-  : resolve(here, '../../data');
+// DATA_DIR resolves the same way as memory.ts — DEV_INFRA_DATA_DIR
+// override > per-target-id subdir > legacy single-dir. Keeps the
+// findings.jsonl alongside its sibling memory.db.
+const DATA_DIR = (() => {
+  if (process.env.DEV_INFRA_DATA_DIR) return resolve(process.env.DEV_INFRA_DATA_DIR);
+  const tid = process.env.DEVINFRA_TARGET_ID;
+  if (tid && tid !== 'default') return resolve(here, '../../data', tid);
+  return resolve(here, '../../data');
+})();
 const LOG_FILE = resolve(DATA_DIR, 'findings.jsonl');
 const RING_MAX = 500;
 const RUNS_MAX = 200;

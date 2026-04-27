@@ -27,13 +27,30 @@ import { z } from 'zod';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, '../..');
-const CONFIG_FILE = resolve(REPO_ROOT, 'dev-infra.config.json');
+// Multi-target: when DEVINFRA_TARGET_ID is set, look for
+// dev-infra.<id>.config.json first, falling back to the default file.
+// Lets multiple daemons share one dev-infra checkout with isolated
+// configs as well as isolated state.
+const CONFIG_FILE = (() => {
+  const tid = process.env.DEVINFRA_TARGET_ID;
+  if (tid && tid !== 'default') {
+    const perTarget = resolve(REPO_ROOT, `dev-infra.${tid}.config.json`);
+    if (existsSync(perTarget)) return perTarget;
+  }
+  return resolve(REPO_ROOT, 'dev-infra.config.json');
+})();
 
 const ConfigSchema = z.object({
   /** Absolute path to the watched repo. */
   targetPath: z.string().min(1),
   /** Human-friendly label for this target — shown in the dashboard header. */
   targetLabel: z.string().min(1),
+  /** Stable slug for this target — used to isolate per-target state under
+   *  data/<targetId>/. Default 'default' keeps single-target installs
+   *  exactly where they were before this field landed. Set this to run
+   *  multiple daemons against different repos without state collisions
+   *  (each daemon also needs a unique PORT — see env DEV_INFRA_PORT). */
+  targetId: z.string().min(1).default('default'),
   /** Globs (relative to targetPath) the file watcher subscribes to. */
   watchGlobs: z.array(z.string()).min(1),
   /** Directory of contract files (Zod ops/cmds), relative to targetPath. Null = no contracts layer. */
@@ -156,6 +173,7 @@ const NIK_DEFAULT_TARGET = process.env.NIK_PATH ?? resolve(homedir(), 'NIK');
 const DEFAULT_CONFIG: DevInfraConfig = {
   targetPath: process.env.DEVINFRA_TARGET ?? NIK_DEFAULT_TARGET,
   targetLabel: process.env.DEVINFRA_LABEL ?? 'Nik',
+  targetId: process.env.DEVINFRA_TARGET_ID ?? 'default',
   watchGlobs: [
     'web/src/**/*.{ts,tsx}',
     'web/public/*',

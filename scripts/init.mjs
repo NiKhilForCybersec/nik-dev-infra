@@ -38,6 +38,9 @@ for (let i = 0; i < args.length; i++) {
   if (a === '--detect-only') { flags.detectOnly = args[i + 1]; i++; continue; }
   if (a === '--target') { flags.target = args[i + 1]; i++; continue; }
   if (a === '--label') { flags.label = args[i + 1]; i++; continue; }
+  if (a === '--target-id') { flags.targetId = args[i + 1]; i++; continue; }
+  if (a === '--port') { flags.port = args[i + 1]; i++; continue; }
+  if (a === '--ui-port') { flags.uiPort = args[i + 1]; i++; continue; }
   if (a === '--non-interactive' || a === '-y') { flags.nonInteractive = true; continue; }
   console.warn(`[init] unknown arg: ${a}`);
 }
@@ -51,6 +54,20 @@ usage:
   node scripts/init.mjs --target <path> -y           detect + write, no prompts
   node scripts/init.mjs --detect-only <path>         show detected config, don't write
   node scripts/init.mjs --help                       this message
+
+multi-target options (one daemon per target, isolated state):
+  --target-id <slug>     unique slug; state lands at data/<slug>/
+                         instead of data/. Required to avoid SQLite
+                         collisions when running multiple daemons.
+  --port <num>           daemon port (default 5175). Pick a unique
+                         number per target.
+  --ui-port <num>        UI port (default 5174). Pick a unique
+                         number per target.
+
+  Example — second target on different ports:
+    node scripts/init.mjs --target ~/MyApp --label MyApp \\
+      --target-id myapp --port 5185 --ui-port 5184 -y
+    PORT=5185 UI_PORT=5184 DEVINFRA_TARGET_ID=myapp npm start
 `);
   process.exit(0);
 }
@@ -239,6 +256,7 @@ function buildConfig(d, overrides = {}) {
   const cfg = {
     targetPath: overrides.targetPath ?? d.target,
     targetLabel: overrides.label ?? d.label,
+    ...(overrides.targetId ? { targetId: overrides.targetId } : {}),
     watchGlobs: d.detected.watchGlobs,
     contractsDir: d.detected.contractsDir,
     screensGlob: d.detected.screensGlob,
@@ -339,12 +357,28 @@ async function main() {
     }
   }
 
-  const cfg = buildConfig(d);
-  const path = writeConfig(cfg);
-  console.log(`\n✓ wrote ${path}`);
-  console.log(`\nNext:`);
-  console.log(`  npm install`);
-  console.log(`  npm start             # daemon on :5175, dashboard on :5174`);
+  const cfg = buildConfig(d, { targetId: flags.targetId });
+  // Multi-target: when --target-id is set, write a per-target config
+  // file (dev-infra.<slug>.config.json) so multiple targets can co-exist
+  // without overwriting each other's settings. Default mode keeps the
+  // canonical dev-infra.config.json behavior.
+  if (flags.targetId) {
+    const writePath = resolve(REPO_ROOT, `dev-infra.${flags.targetId}.config.json`);
+    const fs2 = await import('node:fs');
+    fs2.writeFileSync(writePath, JSON.stringify(cfg, null, 2) + '\n');
+    console.log(`\n✓ wrote ${writePath}`);
+    const port = flags.port ?? '5175';
+    const uiPort = flags.uiPort ?? '5174';
+    console.log(`\nMulti-target run command (unique ports per target):`);
+    console.log(`  PORT=${port} UI_PORT=${uiPort} DEVINFRA_TARGET_ID=${flags.targetId} npm start`);
+    console.log(`\nState for this target lives at: data/${flags.targetId}/`);
+  } else {
+    const path = writeConfig(cfg);
+    console.log(`\n✓ wrote ${path}`);
+    console.log(`\nNext:`);
+    console.log(`  npm install`);
+    console.log(`  npm start             # daemon on :5175, dashboard on :5174`);
+  }
   if (d.detected.screensGlob) {
     console.log(`  npm i -D playwright   # for screen-prober (optional but recommended)`);
     console.log(`  npx playwright install chromium`);

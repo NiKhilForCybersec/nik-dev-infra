@@ -30,11 +30,18 @@ import { fileURLToPath } from 'node:url';
 import type { Finding } from './types.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
-// DATA_DIR can be overridden for tests / sandboxing via DEV_INFRA_DATA_DIR.
-// Default points at `<repo-root>/data` next to the source tree.
-const DATA_DIR = process.env.DEV_INFRA_DATA_DIR
-  ? resolve(process.env.DEV_INFRA_DATA_DIR)
-  : resolve(here, '../../data');
+// DATA_DIR resolves in priority order:
+//  1. DEV_INFRA_DATA_DIR (test sandbox, explicit override)
+//  2. <repo>/data/<DEVINFRA_TARGET_ID> when target id != 'default'
+//     so multiple daemons (one per repo) can co-exist in the same
+//     dev-infra checkout without trampling each other's SQLite/JSONL
+//  3. <repo>/data — single-target back-compat (no breaking change)
+const DATA_DIR = (() => {
+  if (process.env.DEV_INFRA_DATA_DIR) return resolve(process.env.DEV_INFRA_DATA_DIR);
+  const tid = process.env.DEVINFRA_TARGET_ID;
+  if (tid && tid !== 'default') return resolve(here, '../../data', tid);
+  return resolve(here, '../../data');
+})();
 const NOTEBOOKS_DIR = resolve(DATA_DIR, 'notebooks');
 const DB_FILE = resolve(DATA_DIR, 'memory.db');
 
