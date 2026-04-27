@@ -37,9 +37,18 @@ import { newId } from '../findings.ts';
 import { getCodeFile, query, recordCodeFileIntent } from '../memory.ts';
 import type { Agent, Finding } from '../types.ts';
 
-const PER_CYCLE_CAP = 2;
+// Phase 4: pinned to haiku for structured extraction. The MODEL switch
+// halves the API cost per call but DOES NOT speed up wall clock —
+// measured 2026-04-27, a single haiku call still took 65s wall (9s
+// API + ~55s claude CLI bootstrap). The CLI overhead dominates every
+// call regardless of model. Real speedup would require switching to
+// the Anthropic SDK directly (queued, big refactor). Until then,
+// hold timeouts conservative + cap parallelism via per-cycle wall
+// budget. Cost optimization is still a net win: haiku is ~12× cheaper.
+const MODEL = 'claude-haiku-4-5';
+const PER_CYCLE_CAP = 3;
 const MAX_FILE_BYTES = 100 * 1024;       // skip files >100KB for the LLM call (token cost)
-const TIMEOUT_MS = 90_000;
+const TIMEOUT_MS = 90_000;               // CLI bootstrap dominates — needs the full window
 const SOURCE_TRUNCATE = 12_000;          // 12KB of source max — the structured intent prompt only needs the gist
 // Stop dispatching new calls once the cycle has consumed this much wall
 // clock — leaves headroom under the orchestrator's 5-min hard timeout.
@@ -193,6 +202,7 @@ export const intentExtractorAgent: Agent = {
         const r = await runClaude({
           prompt: buildPrompt(c, source),
           timeoutMs: TIMEOUT_MS,
+          model: MODEL,
           // Read-only — no Edit/Write needed. The intent agent never mutates user code.
           allowedTools: ['Read', 'Grep', 'Glob'],
         });

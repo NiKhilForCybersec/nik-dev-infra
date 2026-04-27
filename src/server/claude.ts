@@ -42,6 +42,11 @@ export type ClaudeRunOptions = {
    *  repo so write-tools (Edit / Write) land their edits in the right
    *  place rather than in dev-infra's own source. */
   cwd?: string;
+  /** Override the model. When unset, uses whatever the user's Claude Code
+   *  CLI is configured for (typically opus). Agents doing structured
+   *  high-volume extraction (intent-extractor) pin to haiku for ~3×
+   *  speed + lower cost; reasoning-heavy agents leave it default. */
+  model?: string;
 };
 
 /** Default tool whitelist passed to every claude -p call. All current
@@ -74,6 +79,7 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
     '--add-dir', config.targetPath,
     '--allowed-tools', allowed.join(','),
   ];
+  if (opts.model) args.push('--model', opts.model);
   for (const d of opts.extraDirs ?? []) args.push('--add-dir', d);
 
   try {
