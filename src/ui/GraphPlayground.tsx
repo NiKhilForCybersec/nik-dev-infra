@@ -67,6 +67,7 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [selectedTypes, setSelectedTypes] = useState<Set<NodeType>>(new Set(Object.keys(NODE_COLOR) as NodeType[]));
+  const [selectedStatuses, setSelectedStatuses] = useState<Set<Status>>(new Set(Object.keys(STATUS_COLOR) as Status[]));
   const [selected, setSelected] = useState<{ id: string; entity?: Entity; touching: Finding[] } | null>(null);
   const [hover, setHover] = useState<{ id: string; x: number; y: number } | null>(null);
 
@@ -136,10 +137,14 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
   const elements = useMemo<ElementDefinition[]>(() => {
     if (!graph) return [];
     const f = filter.trim().toLowerCase();
-    const nodeMatches = (n: Node) =>
+    // Type filter HIDES nodes; status filter DIMS them (so the user can
+    // still see structural context when isolating a status — e.g. "show
+    // only orphans + their neighbours" reads better than "hide everything
+    // that isn't orphan").
+    const visible = (n: Node) =>
       selectedTypes.has(n.type) &&
       (!f || n.label.toLowerCase().includes(f) || n.id.toLowerCase().includes(f));
-    const visibleNodeIds = new Set(graph.nodes.filter(nodeMatches).map((n) => n.id));
+    const visibleNodeIds = new Set(graph.nodes.filter(visible).map((n) => n.id));
     const els: ElementDefinition[] = [];
     for (const n of graph.nodes) {
       if (!visibleNodeIds.has(n.id)) continue;
@@ -150,17 +155,25 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
           label: n.label.length > 28 ? n.label.slice(0, 26) + '…' : n.label,
           type: n.type,
           status,
+          dimmed: !selectedStatuses.has(status),
         },
       });
     }
     for (const e of graph.edges) {
       if (!visibleNodeIds.has(e.from) || !visibleNodeIds.has(e.to)) continue;
+      const fromStatus = statusByUrn.get(e.from) ?? 'unknown';
+      const toStatus = statusByUrn.get(e.to) ?? 'unknown';
+      // An edge dims if EITHER endpoint dims — keeps focused subgraph crisp.
       els.push({
-        data: { id: `${e.from}->${e.to}->${e.kind}`, source: e.from, target: e.to, kind: e.kind },
+        data: {
+          id: `${e.from}->${e.to}->${e.kind}`,
+          source: e.from, target: e.to, kind: e.kind,
+          dimmed: !selectedStatuses.has(fromStatus) || !selectedStatuses.has(toStatus),
+        },
       });
     }
     return els;
-  }, [graph, filter, selectedTypes, statusByUrn]);
+  }, [graph, filter, selectedTypes, selectedStatuses, statusByUrn]);
 
   // Mount cytoscape once; rebuild elements + relayout on filter change.
   useEffect(() => {
@@ -194,6 +207,14 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
           {
             selector: 'node:selected',
             style: { 'border-width': 5, 'border-color': '#ffffff' },
+          },
+          {
+            selector: 'node[?dimmed]',
+            style: { 'opacity': 0.12 },
+          },
+          {
+            selector: 'edge[?dimmed]',
+            style: { 'opacity': 0.06 },
           },
           {
             selector: 'edge',
@@ -360,12 +381,33 @@ export function GraphPlayground({ onClose }: { onClose: () => void }) {
           })}
         </div>
         <div className="mono" style={{ marginLeft: 'auto', fontSize: 10, display: 'flex', gap: 12, alignItems: 'center' }}>
-          <span style={{ color: STATUS_COLOR.ok }}>● ok {statusCounts.ok}</span>
-          <span style={{ color: STATUS_COLOR.warn }}>● warn {statusCounts.warn}</span>
-          <span style={{ color: STATUS_COLOR.error }}>● err {statusCounts.err}</span>
-          <span style={{ color: STATUS_COLOR.orphan }}>● orphan {statusCounts.orphan}</span>
-          <span style={{ color: STATUS_COLOR.silent }}>● silent {statusCounts.silent}</span>
-          <span style={{ color: STATUS_COLOR.unknown }}>● unknown {statusCounts.unk}</span>
+          {(['ok', 'warn', 'error', 'orphan', 'silent', 'unknown'] as Status[]).map((s) => {
+            const on = selectedStatuses.has(s);
+            const n = s === 'ok' ? statusCounts.ok
+              : s === 'warn' ? statusCounts.warn
+              : s === 'error' ? statusCounts.err
+              : s === 'orphan' ? statusCounts.orphan
+              : s === 'silent' ? statusCounts.silent
+              : statusCounts.unk;
+            return (
+              <button
+                key={s}
+                onClick={() => {
+                  const next = new Set(selectedStatuses);
+                  on ? next.delete(s) : next.add(s);
+                  setSelectedStatuses(next);
+                }}
+                title={on ? `hide ${s}` : `show ${s}`}
+                style={{
+                  padding: '2px 6px', fontSize: 10, cursor: 'pointer',
+                  background: on ? STATUS_COLOR[s] + '22' : 'transparent',
+                  borderColor: on ? STATUS_COLOR[s] : 'var(--hairline)',
+                  color: on ? STATUS_COLOR[s] : 'var(--fg-3)',
+                  opacity: on ? 1 : 0.55,
+                }}
+              >● {s === 'error' ? 'err' : s === 'unknown' ? 'unknown' : s} {n}</button>
+            );
+          })}
           <button onClick={onClose} className="mono" style={{ padding: '4px 10px', fontSize: 12 }}>×</button>
         </div>
       </div>
