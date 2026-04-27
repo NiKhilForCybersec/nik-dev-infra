@@ -77,7 +77,26 @@ export type ClaudeRunOptions = {
   /** When useApi is true, max tokens for the response. Default 2048
    *  matches the size of structured-extraction outputs. */
   maxTokens?: number;
+  /** Sandbox the spawned `claude` subprocess: strip env to a minimal
+   *  safe whitelist (no secrets / API keys leak), enforce that
+   *  allowedTools is a subset of SAFE_TOOLS, require an explicit cwd
+   *  outside dev-infra's own source. Defense-in-depth for any agent
+   *  that dispatches into the user's repo with write tools. */
+  sandbox?: boolean;
 };
+
+/** Tools allowed when sandbox=true. Anything else (WebFetch, WebSearch,
+ *  TodoWrite, MCP tools, computer-use, etc.) is rejected at the gate
+ *  rather than passed through to claude. */
+const SAFE_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash']);
+
+/** Environment variable allowlist when sandbox=true. Everything else is
+ *  stripped — including ANTHROPIC_API_KEY, AWS_*, GITHUB_TOKEN, db
+ *  credentials, etc. — so a prompt-injected `claude` session can't
+ *  exfiltrate secrets via env reads. PATH is needed for the binary
+ *  itself; HOME for npm cache and tmp dirs; LANG / LC_* for proper
+ *  unicode handling in the dispatched session's reads. */
+const SAFE_ENV_VARS = new Set(['PATH', 'HOME', 'LANG', 'TERM', 'TMPDIR']);
 
 /** Default tool whitelist passed to every claude -p call. All current
  *  agents are read-only against the watched repo; emits flow through
@@ -102,6 +121,20 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
   if (opts.useApi) return runClaudeAPI(opts);
   const startedAt = Date.now();
   const allowed = opts.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
+
+  // Sandbox enforcement (per #7) — defense-in-depth before claude
+  // sees the tool list. Any tool not in SAFE_TOOLS is rejected;
+  // dispatched cwd defaults to config.targetPath but MUST be set
+  // explicitly to keep the session away from dev-infra's source.
+  if (opts.sandbox) {
+    const bad = allowed.filter((t) => !SAFE_TOOLS.has(t));
+    if (bad.length > 0) {
+      throw new Error(`runClaude sandbox=true rejected tools not in safe set: ${bad.join(', ')}. Safe set: ${[...SAFE_TOOLS].join(', ')}`);
+    }
+    if (!opts.cwd) {
+      throw new Error(`runClaude sandbox=true requires explicit cwd — refusing to default to dev-infra source dir`);
+    }
+  }
   // Prepend rolling summary if the caller has one; the agent uses it as
   // "what I previously concluded" context so it doesn't re-derive state.
   const fullPrompt = opts.priorSummary
@@ -117,10 +150,21 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
   for (const d of opts.extraDirs ?? []) args.push('--add-dir', d);
 
   try {
+    // Build the env: in sandbox mode strip everything except SAFE_ENV_VARS
+    // so a prompt-injected session can't read ANTHROPIC_API_KEY, AWS_*,
+    // GITHUB_TOKEN, etc. CLI mode still needs PATH so claude itself
+    // resolves; HOME for cache; LANG / TERM / TMPDIR for normal IO.
+    const childEnv: NodeJS.ProcessEnv = opts.sandbox
+      ? Object.fromEntries(
+          Object.entries(process.env).filter(([k]) => SAFE_ENV_VARS.has(k)),
+        )
+      : process.env;
+
     const r = await execa(CLAUDE_BIN, args, {
       timeout: opts.timeoutMs ?? 90_000,
       reject: true,
       stripFinalNewline: true,
+      env: childEnv,
       ...(opts.cwd ? { cwd: opts.cwd } : {}),
     });
     // Claude Code's --output-format json emits a single JSON object on stdout

@@ -613,6 +613,12 @@ export const autoFixDriverAgent: Agent = {
         cwd: config.targetPath,
         allowedTools: ALLOWED_TOOLS,
         timeoutMs: DISPATCH_TIMEOUT_MS,
+        // Sandbox the dispatched session: strips secrets from env
+        // (ANTHROPIC_API_KEY / AWS_* / etc.) so a prompt-injection
+        // can't exfiltrate, and rejects any tool outside SAFE_TOOLS.
+        // ALLOWED_TOOLS = Read/Edit/Write/Glob/Grep — already a subset,
+        // so this is purely defense-in-depth, not a behavior change.
+        sandbox: true,
       });
 
       // Post-dispatch diff snapshot — surfaces what the cycle actually
