@@ -118,16 +118,38 @@ In implementation order — defends against most-impactful failures first:
 9. **Production eval set + weekly run** — 20–50 gold queries; recall@k tracked. Without this, drift is invisible until users complain.
 10. **Graceful degradation per layer** — health checks, fallback paths, never hard-crash on a single layer outage.
 
-## Open questions (no good answer yet)
+## Open questions — addressed in `MEMORY_OS_TRUST_LAYER.md`
 
-- **Source-independence detection without manual annotation.** Heuristics (cite-graphs) help but don't scale.
-- **Optimal decay curve.** Ebbinghaus is a starting point; context-dependent rates are an open research problem. YourMemory closest, still hand-tuned.
-- **Recursive summarisation fidelity loss.** MemGPT accepts it; nobody quantifies it cleanly. Open research.
-- **Temporal conflict at scale.** Zep's bi-temporal works for small graphs; thousands of conflicting facts over years are unproven.
-- **Hallucination detection without ground truth.** Entailment models are promising but not standard.
-- **Cross-user privacy isolation in one OS instance.** Multi-tenancy is largely unaddressed in OSS systems today.
+The six hard problems each get a dedicated engineered subsystem in the trust layer doc. Summary of what's now defended (vs unsolved):
 
-These five are the real research frontier. The OS doesn't need to solve them v1 — it needs to *not pretend it has solved them*.
+| Problem | Defense | Residual risk |
+|---|---|---|
+| **Source independence** | Lineage graph + claim clusters + multiplicative independence_score | Connectors must declare lineage at ingestion; can't be inferred post-hoc |
+| **Optimal decay curve** | 8 type-specific decay profiles + state machine (active → stale → revalidation_needed → archived) | Half-life numbers need empirical tuning; cell type assignment needs connector cooperation |
+| **Recursive summarisation** | 3-level pyramid (raw / atomic_claims / summary); summaries are views, atomic claims are memory; coverage / invention / contradiction tests | Atomic-claim extraction itself uses an LLM (mitigated by source_span requirement) |
+| **Temporal conflict** | Bitemporal model (observed_at + valid_from/until) + 7-type conflict taxonomy + supersedes/superseded_by | Entity resolution + property extraction needed for similar-claim matching; auto-resolve thresholds need tuning |
+| **Hallucination auditor** | Three-question split (grounded vs trustworthy vs claims-beyond-evidence); 5-label claim scheme; **fact-vs-segment storage rule** | Adds an LLM pass per high-stakes response; "speculative" labels rely on weak self-uncertainty |
+| **Multi-tenant privacy** | tenant_id everywhere + 4-outcome policy (allow/deny/redacted/confirm) + tenant-scoped vector search + audit log | Per-tenant indexes don't scale to 10k+ tenants; **prompt-injection at tool boundary still unsolved** |
+
+**The single most important defense (added by the trust layer):**
+
+```
+Only explicit user statements become facts.
+Model interpretations become segments.
+Segments require confirmation or repeated independent
+evidence before promoting to facts.
+```
+
+This is the architectural rule that prevents most hallucination at the *write* path — limiting how memory enters the brain in the first place.
+
+### Still genuinely unsolved (after the trust layer)
+
+- Prompt-injection at the consumer↔MCP boundary (V3 work; needs input sanitization + tool-grant scoping)
+- Tunings (0.90 promotion threshold, 0.02 invention rate) — need empirical validation
+- Cross-app prompt orchestration: when consumer A's tool calls consumer B's tool, who owns policy?
+- Per-tenant vector indexes at large scale
+
+These are the real research frontier remaining. The OS doesn't pretend to solve them; it makes the residual risk *visible* via the per-cell trust profile.
 
 ## Source links
 

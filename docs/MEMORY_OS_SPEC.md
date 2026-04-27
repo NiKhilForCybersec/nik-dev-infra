@@ -9,11 +9,13 @@
 A pluggable **memory operating system** with its own agents. Plug it into a target (personal assistant, code repo, email, calendar, vault) and the OS:
 
 1. Observes the target via target-specific **connector agents** (the OS's own).
-2. Lands raw observations into a universal **24-layer storage substrate**.
-3. Consolidates findings into **cells** (neurons) with provenance, decay, and multi-source agreement.
-4. Exposes the brain back through an **MCP server** so any consumer (Nik, Claude Code, an agent) can ask questions.
+2. Lands raw observations into a universal **24-table substrate** organised into 6 functional zones.
+3. Promotes findings through a **trust pipeline** (source independence + evidence scoring + policy filtering) and **core agents** (link / merge / verify / conflict / decay / reinforce / promote) into **cells** — high-confidence, evidence-backed, activatable neurons.
+4. Exposes the brain back through an **MCP server** so any consumer (Nik, Claude Code, an agent) can ask questions, with every response carrying a **trust profile** per cell.
 
 The OS is target-independent. The connectors are target-specific.
+
+**Product positioning** — not *"AI memory that is always right"* (a hostage to fortune). Instead: *"AI memory that knows how trustworthy each memory is, why we believe it, when it may be stale, and who is allowed to use it."* Every cell carries a 9-field trust profile (see `MEMORY_OS_TRUST_LAYER.md`).
 
 ## Architecture
 
@@ -342,9 +344,20 @@ If yes after a week of real use, expand to a second connector. If no, fix activa
 3. **Connector lifecycle** — connectors run inside the OS daemon, or as separate processes? Inside is simpler v1; out-of-process is needed for sandbox / privacy isolation later.
 4. **Independence groups** — how does the OS *verify* that two connectors are truly independent? Simplest: trust the `describe().independence` self-declaration. Stronger: hash the source data, detect overlap.
 
-## Edge-case catalog
+## Edge-case catalog + trust layer
 
-A separate doc (`MEMORY_OS_PITFALLS.md`) is being researched and will be appended. Topics: memory drift, multi-source pitfalls, decay tuning, activation pitfalls, connector contract drift, conflict resolution, privacy, LLM-observer hallucination, eval drift, operational failures.
+Two companion docs cover the failure-mode + reliability work:
+
+- **`MEMORY_OS_PITFALLS.md`** — production failures from Zep / Mem0 / ChatGPT-memory / YourMemory; 10 edge-case categories with day-1 defenses; 10 prioritised defenses in implementation order.
+- **`MEMORY_OS_TRUST_LAYER.md`** — engineered subsystems for the 6 hard problems (source independence / decay curves / atomic claims / bitemporal conflicts / hallucination auditor / multi-tenant privacy). Each problem gets a dedicated subsystem with confidence scores, evidence, fallback paths, and measurable tests. **The trust profile per cell is the actual product.**
+
+The promotion rule across both:
+
+```
+Never promote memory because one model "thinks" it is true.
+Promote memory only when the system can justify it with
+source, evidence, confidence, and policy.
+```
 
 ## Where this is built
 
