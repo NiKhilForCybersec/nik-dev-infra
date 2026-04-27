@@ -214,6 +214,23 @@ db.exec(`
     intent_at      INTEGER
   );
   CREATE INDEX IF NOT EXISTS idx_code_files_parsed_at ON code_files(parsed_at DESC);
+
+  -- Approval queue (auto-fix-driver approvalMode='manual'). Each row
+  -- represents one cycle's outcome held for human review. status
+  -- starts as 'pending' and transitions to 'approved' or 'rejected'.
+  -- payload_json holds the cycle's diff, claude output tail, target
+  -- concern — everything the UI needs to render the decision panel.
+  CREATE TABLE IF NOT EXISTS approvals (
+    id           TEXT PRIMARY KEY,
+    agent        TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    created_at   INTEGER NOT NULL,
+    decided_at   INTEGER,
+    status       TEXT NOT NULL,                           -- pending | approved | rejected
+    payload_json TEXT NOT NULL,
+    note         TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status, created_at DESC);
 `);
 
 const WIKI_DIR = resolve(DATA_DIR, 'wiki');
@@ -832,4 +849,47 @@ export function recordCodeFileParse(path: string, sha256: string, parsedAt = Dat
 /** Update the intent summary for a previously-parsed file. */
 export function recordCodeFileIntent(path: string, summary: string, intentAt = Date.now()): void {
   setCodeFileIntent.run(summary, intentAt, path);
+}
+
+// ─── approvals queue (auto-fix-driver manual mode) ────────────────────
+
+const insertApproval = db.prepare(`
+  INSERT INTO approvals (id, agent, kind, created_at, decided_at, status, payload_json, note)
+    VALUES (?, ?, ?, ?, NULL, 'pending', ?, NULL)
+`);
+const updateApprovalDecision = db.prepare(`
+  UPDATE approvals SET status = ?, decided_at = ?, note = ? WHERE id = ?
+`);
+const selectApproval = db.prepare<[string]>('SELECT * FROM approvals WHERE id = ?');
+const selectPendingApprovals = db.prepare(`SELECT * FROM approvals WHERE status = 'pending' ORDER BY created_at DESC`);
+const selectAllApprovals = db.prepare(`SELECT * FROM approvals ORDER BY created_at DESC LIMIT 50`);
+
+export type ApprovalRow = {
+  id: string;
+  agent: string;
+  kind: string;
+  created_at: number;
+  decided_at: number | null;
+  status: 'pending' | 'approved' | 'rejected';
+  payload_json: string;
+  note: string | null;
+};
+
+/** Insert a pending approval (called by an agent after a cycle that
+ *  needs human review). The id should be a fresh ULID-ish — agents
+ *  reuse newId() from findings.ts. */
+export function recordApproval(opts: { id: string; agent: string; kind: string; payload: Record<string, unknown> }): void {
+  insertApproval.run(opts.id, opts.agent, opts.kind, Date.now(), JSON.stringify(opts.payload));
+}
+
+export function decideApproval(id: string, status: 'approved' | 'rejected', note?: string): void {
+  updateApprovalDecision.run(status, Date.now(), note ?? null, id);
+}
+
+export function getApproval(id: string): ApprovalRow | null {
+  return (selectApproval.get(id) as ApprovalRow | undefined) ?? null;
+}
+
+export function listApprovals(filter: 'pending' | 'all' = 'pending'): ApprovalRow[] {
+  return (filter === 'pending' ? selectPendingApprovals.all() : selectAllApprovals.all()) as ApprovalRow[];
 }

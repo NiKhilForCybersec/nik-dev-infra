@@ -8,10 +8,10 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGENTS } from './agents/index.ts';
 import { config } from './config.ts';
-import { onFinding, onRun, snapshot } from './findings.ts';
-import { entities, factsByPredicate, getPhase, listHooks, listSegments, memoryStats, query, recallAll, wikiHistory, wikiList, wikiRead } from './memory.ts';
+import { emit, newId, onFinding, onRun, snapshot } from './findings.ts';
+import { decideApproval, entities, factsByPredicate, getApproval, getPhase, listApprovals, listHooks, listSegments, memoryStats, query, recallAll, wikiHistory, wikiList, wikiRead } from './memory.ts';
 import { startOrchestrator, triggerAgent } from './orchestrator.ts';
-import type { ServerEvent } from './types.ts';
+import type { Finding, ServerEvent } from './types.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const GRAPH_FILE = resolve(here, '../../data/graph.json');
@@ -216,6 +216,99 @@ app.post<{ Params: { name: string } }>('/api/agents/:name/run', async (req, repl
   }
   return { ok: true };
 });
+
+// REST: pending approvals queue. Returns rows with the payload parsed
+// so the dashboard doesn't have to JSON.parse on every render.
+app.get<{ Querystring: { filter?: string } }>('/api/approvals', async (req) => {
+  const filter = req.query.filter === 'all' ? 'all' : 'pending';
+  const rows = listApprovals(filter);
+  return {
+    approvals: rows.map((r) => ({
+      ...r,
+      payload: (() => { try { return JSON.parse(r.payload_json); } catch { return null; } })(),
+    })),
+  };
+});
+
+// POST /api/approvals/:id/decide  body: { decision: 'approved'|'rejected', note?: string }
+// On reject, attempts to revert each file in the diff via `git checkout --`.
+// Hard-path: the revert is best-effort; failures emit auto-fix:revert-failed
+// for human follow-up rather than silently leaving partial state.
+app.post<{ Params: { id: string }; Body: { decision: 'approved' | 'rejected'; note?: string } }>(
+  '/api/approvals/:id/decide',
+  async (req, reply) => {
+    const { decision, note } = req.body ?? {};
+    if (decision !== 'approved' && decision !== 'rejected') {
+      reply.code(400);
+      return { error: `decision must be 'approved' or 'rejected'` };
+    }
+    const row = getApproval(req.params.id);
+    if (!row) {
+      reply.code(404);
+      return { error: 'approval not found' };
+    }
+    if (row.status !== 'pending') {
+      reply.code(409);
+      return { error: `approval already ${row.status}` };
+    }
+
+    // On reject, revert the file changes the dispatched session made.
+    let revertErrors: string[] = [];
+    if (decision === 'rejected') {
+      try {
+        const payload = JSON.parse(row.payload_json) as { diff?: { filesChanged?: string[] }; headBefore?: string };
+        const files = payload.diff?.filesChanged ?? [];
+        const headBefore = payload.headBefore;
+        if (files.length > 0) {
+          const { execa } = await import('execa');
+          for (const file of files) {
+            try {
+              if (headBefore) {
+                // Restore tracked-file content from the snapshot.
+                await execa('git', ['checkout', headBefore, '--', file], { cwd: config.targetPath, timeout: 10_000 });
+              } else {
+                // Untracked or no snapshot — try a working-tree revert.
+                await execa('git', ['checkout', '--', file], { cwd: config.targetPath, timeout: 10_000 });
+              }
+            } catch (e) {
+              revertErrors.push(`${file}: ${(e as Error).message.slice(0, 100)}`);
+            }
+          }
+        }
+      } catch (e) {
+        revertErrors.push(`payload parse: ${(e as Error).message}`);
+      }
+    }
+
+    decideApproval(req.params.id, decision, note);
+    // Emit a finding so the rail records the human decision.
+    emit({
+      id: newId(),
+      agent: 'auto-fix-driver',
+      kind: decision === 'approved' ? 'auto-fix:approved' : 'auto-fix:rejected',
+      at: Date.now(),
+      severity: decision === 'rejected' && revertErrors.length > 0 ? 'warn' : 'info',
+      summary: decision === 'approved'
+        ? `approved cycle ${req.params.id.slice(0, 8)}`
+        : `rejected cycle ${req.params.id.slice(0, 8)} · ${revertErrors.length === 0 ? 'clean revert' : `${revertErrors.length} revert errors`}`,
+      payload: { approvalId: req.params.id, decision, note: note ?? null, revertErrors },
+    } as Finding);
+
+    if (revertErrors.length > 0) {
+      emit({
+        id: newId(),
+        agent: 'auto-fix-driver',
+        kind: 'auto-fix:revert-failed',
+        at: Date.now(),
+        severity: 'warn',
+        summary: `${revertErrors.length} file(s) failed to revert — manual cleanup required`,
+        payload: { approvalId: req.params.id, errors: revertErrors },
+      } as Finding);
+    }
+
+    return { ok: true, decision, revertErrors };
+  },
+);
 
 // REST: per-screen screenshot metadata (mtime, size, blank-flag) for the
 // dashboard's quality check + cache-bust logic. The gallery polls this

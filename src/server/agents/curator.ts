@@ -370,6 +370,10 @@ const RULES: Record<string, Rule> = {
   'auto-fix:needs-clarification':      rule_skip('internal — gap surfaced for tightening, not a new concern'),
   'auto-fix:out-of-scope':             rule_skip('internal — concern outside autoFixLoop.scopes'),
   'auto-fix:diff-recorded':            rule_skip('internal — git snapshot for cycle audit'),
+  'auto-fix:awaiting-approval':        rule_skip('internal — pending approval state'),
+  'auto-fix:approved':                 rule_skip('internal — approval decision'),
+  'auto-fix:rejected':                 rule_skip('internal — approval decision'),
+  'auto-fix:revert-failed':            rule_skip('internal — git checkout failure'),
   'auto-fix:summary':                  rule_skip('internal — loop digest'),
 };
 

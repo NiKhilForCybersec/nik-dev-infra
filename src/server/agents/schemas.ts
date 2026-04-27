@@ -230,6 +230,10 @@ export const AutoFixDriverFindingSchema = Base.extend({
     'auto-fix:needs-clarification',
     'auto-fix:out-of-scope',
     'auto-fix:diff-recorded',
+    'auto-fix:awaiting-approval',
+    'auto-fix:approved',
+    'auto-fix:rejected',
+    'auto-fix:revert-failed',
     'auto-fix:summary',
   ]),
 });

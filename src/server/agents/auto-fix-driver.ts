@@ -39,7 +39,7 @@ import { runClaude } from '../claude.ts';
 import { config } from '../config.ts';
 import { newId } from '../findings.ts';
 import { buildFileGrounding, renderFileGrounding } from '../grounding.ts';
-import { query } from '../memory.ts';
+import { query, recordApproval } from '../memory.ts';
 import type { Agent, Finding } from '../types.ts';
 
 type Severity = 'info' | 'warn' | 'error';
@@ -661,6 +661,40 @@ export const autoFixDriverAgent: Agent = {
           ...(diffPayload ? { diff: diffPayload } : {}),
         },
       });
+
+      // Manual approval mode (default): hold the cycle in the
+      // approvals queue until the user decides. The dispatched
+      // session has already written changes to the working tree;
+      // the queue UI shows the diff + Approve/Reject buttons.
+      // Reject calls back into the API to `git checkout --` the files.
+      if (c.approvalMode === 'manual' && diffPayload && diffPayload.filesChanged.length > 0) {
+        const approvalId = newId();
+        recordApproval({
+          id: approvalId,
+          agent: 'auto-fix-driver',
+          kind: 'auto-fix:cycle-complete',
+          payload: {
+            fingerprint: target.fingerprint,
+            concernText: target.text,
+            severity: target.severity,
+            fileRef: target.fileRef ?? null,
+            headBefore,
+            scopes: c.scopes,
+            durationMs: r.durationMs,
+            claudeOutputTail: r.text.slice(-1500),
+            diff: diffPayload,
+          },
+        });
+        out.push({
+          id: newId(),
+          agent: 'auto-fix-driver',
+          kind: 'auto-fix:awaiting-approval',
+          at: Date.now(),
+          severity: 'warn',
+          summary: `awaiting approval · ${diffPayload.filesChanged.length} file${diffPayload.filesChanged.length === 1 ? '' : 's'} changed · open AUTO-FIX panel to review`,
+          payload: { approvalId, fingerprint: target.fingerprint, diff: diffPayload },
+        });
+      }
     } catch (e) {
       out.push({
         id: newId(),

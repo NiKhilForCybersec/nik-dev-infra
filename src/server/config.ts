@@ -139,6 +139,13 @@ const ConfigSchema = z.object({
      *    ["**"]                              — anything; only after calibration
      *  When empty, the scope check is skipped (allow everything). */
     scopes: z.array(z.string()),
+    /** When 'manual', each completed cycle is held as a pending approval
+     *  in the dashboard until the user explicitly approves or rejects.
+     *  Reject reverts the cycle's file changes via `git checkout --`.
+     *  When 'auto', completed cycles immediately count as committed
+     *  (the dispatched session's writes stand). Default 'manual' —
+     *  hard-path: human-in-the-loop for autonomous edits. */
+    approvalMode: z.enum(['auto', 'manual']).default('manual'),
   }),
 });
 
@@ -197,6 +204,7 @@ const DEFAULT_CONFIG: DevInfraConfig = {
     // scopes ('web/src/**', etc.) get added by the user, deliberately,
     // after several cycles in `docs/**` audit clean.
     scopes: ['docs/**', '*.md', '*.json'],
+    approvalMode: 'manual',
   },
 };
 

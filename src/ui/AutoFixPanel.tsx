@@ -9,6 +9,27 @@ type AutoFixConfig = {
   maxConsecutiveFailures: number;
   killSwitchFile: string;
   scopes: string[];
+  approvalMode: 'auto' | 'manual';
+};
+
+type Approval = {
+  id: string;
+  agent: string;
+  kind: string;
+  created_at: number;
+  decided_at: number | null;
+  status: 'pending' | 'approved' | 'rejected';
+  payload: {
+    fingerprint?: string;
+    concernText?: string;
+    severity?: string;
+    fileRef?: string | null;
+    headBefore?: string;
+    scopes?: string[];
+    durationMs?: number;
+    claudeOutputTail?: string;
+    diff?: { filesChanged: string[]; outOfScopeFiles: string[]; statTail: string };
+  } | null;
 };
 
 type Finding = {
@@ -34,6 +55,10 @@ const KIND_LABEL: Record<string, string> = {
   'auto-fix:cycle-complete':       'complete',
   'auto-fix:cycle-failed':         'failed',
   'auto-fix:diff-recorded':        'diff',
+  'auto-fix:awaiting-approval':    'awaiting approval',
+  'auto-fix:approved':             'approved',
+  'auto-fix:rejected':             'rejected',
+  'auto-fix:revert-failed':        'revert failed',
   'auto-fix:no-targets':           'no targets',
   'auto-fix:needs-clarification':  'needs clarification',
   'auto-fix:out-of-scope':         'out of scope',
@@ -52,6 +77,10 @@ const KIND_COLOR: Record<string, string> = {
   'auto-fix:cycle-complete':       'var(--ok, #5fd49a)',
   'auto-fix:cycle-failed':         'var(--err)',
   'auto-fix:diff-recorded':        'var(--info)',
+  'auto-fix:awaiting-approval':    'var(--warn)',
+  'auto-fix:approved':             'var(--ok, #5fd49a)',
+  'auto-fix:rejected':             'var(--err)',
+  'auto-fix:revert-failed':        'var(--err)',
   'auto-fix:no-targets':           'var(--fg-3)',
   'auto-fix:needs-clarification':  'var(--warn)',
   'auto-fix:out-of-scope':         'var(--warn)',
@@ -74,20 +103,39 @@ function ago(ts: number): string {
 export function AutoFixPanel({ onClose }: { onClose: () => void }) {
   const [cfg, setCfg] = useState<AutoFixConfig | null>(null);
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [approvals, setApprovals] = useState<Approval[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [triggering, setTriggering] = useState(false);
+  const [decidingId, setDecidingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
     try {
-      const [c, s] = await Promise.all([
+      const [c, s, a] = await Promise.all([
         fetch('/api/config').then((r) => r.json()) as Promise<{ autoFixLoop?: AutoFixConfig }>,
         fetch('/api/snapshot').then((r) => r.json()) as Promise<{ findings: Finding[] }>,
+        fetch('/api/approvals?filter=pending').then((r) => r.json()) as Promise<{ approvals: Approval[] }>,
       ]);
       setCfg(c.autoFixLoop ?? null);
       const ours = s.findings.filter((f) => f.agent === 'auto-fix-driver').slice(-60).reverse();
       setFindings(ours);
+      setApprovals(a.approvals);
     } catch (e) { setError((e as Error).message); }
+  };
+
+  const decide = async (id: string, decision: 'approved' | 'rejected') => {
+    setDecidingId(id);
+    try {
+      const r = await fetch(`/api/approvals/${encodeURIComponent(id)}/decide`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ decision }),
+      });
+      const j = await r.json();
+      if (!r.ok) setError(j.error ?? `HTTP ${r.status}`);
+      await load();
+    } catch (e) { setError((e as Error).message); }
+    finally { setDecidingId(null); }
   };
 
   useEffect(() => {
@@ -148,12 +196,86 @@ export function AutoFixPanel({ onClose }: { onClose: () => void }) {
       {/* Config + status grid */}
       <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--hairline)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, fontSize: 11 }}>
         <ConfigCell label="DRY-RUN" value={cfg?.dryRun ? 'YES (planned only)' : 'NO (live edits)'} colour={cfg?.dryRun ? 'var(--accent)' : 'var(--err)'} />
+        <ConfigCell label="APPROVAL" value={cfg?.approvalMode === 'manual' ? 'MANUAL (human gate)' : 'AUTO (no gate)'} colour={cfg?.approvalMode === 'manual' ? 'var(--accent)' : 'var(--warn)'} />
         <ConfigCell label="DAILY CAP" value={cfg ? `${cfg.maxCyclesPerDay} cycle${cfg.maxCyclesPerDay === 1 ? '' : 's'}/24h` : '—'} />
         <ConfigCell label="HALT AFTER" value={cfg ? `${cfg.maxConsecutiveFailures} consec. failures` : '—'} />
         <ConfigCell label="KILL SWITCH" value={cfg?.killSwitchFile ?? '—'} colour="var(--fg-3)" />
         <ConfigCell label="SCOPES" value={cfg?.scopes.length ? cfg.scopes.join(' · ') : '(open / no filter)'} colour={cfg?.scopes.length ? 'var(--accent)' : 'var(--warn)'} />
         <ConfigCell label="STATUS KIND" value={KIND_LABEL[statusKind] ?? statusKind} colour={KIND_COLOR[statusKind] ?? 'var(--fg-2)'} />
       </div>
+
+      {/* Pending approvals — only render when there are any */}
+      {approvals.length > 0 && (
+        <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--hairline)' }}>
+          <div className="mono" style={{ fontSize: 10, color: 'var(--warn)', letterSpacing: 1.5, marginBottom: 8 }}>
+            PENDING APPROVAL · {approvals.length}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {approvals.map((a) => (
+              <div key={a.id} className="glass" style={{ padding: 12, borderLeft: '3px solid var(--warn)' }}>
+                <div className="mono" style={{ fontSize: 9, color: 'var(--fg-3)' }}>
+                  {ago(a.created_at)} · {a.id.slice(0, 8)}
+                  {a.payload?.severity && <> · <span style={{ color: a.payload.severity === 'error' ? 'var(--err)' : a.payload.severity === 'warn' ? 'var(--warn)' : 'var(--fg-2)' }}>{a.payload.severity}</span></>}
+                </div>
+                {a.payload?.concernText && (
+                  <div style={{ fontSize: 12, color: 'var(--fg)', margin: '4px 0', whiteSpace: 'pre-wrap' }}>
+                    {a.payload.concernText.slice(0, 240)}{a.payload.concernText.length > 240 ? '…' : ''}
+                  </div>
+                )}
+                {a.payload?.diff && a.payload.diff.filesChanged.length > 0 && (
+                  <div style={{ marginTop: 6 }}>
+                    <div className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', letterSpacing: 1, marginBottom: 3 }}>
+                      FILES CHANGED · {a.payload.diff.filesChanged.length}
+                      {a.payload.diff.outOfScopeFiles.length > 0 && (
+                        <span style={{ color: 'var(--err)' }}> · {a.payload.diff.outOfScopeFiles.length} OUT-OF-SCOPE</span>
+                      )}
+                    </div>
+                    {a.payload.diff.filesChanged.slice(0, 8).map((file, i) => {
+                      const oos = a.payload!.diff!.outOfScopeFiles.includes(file);
+                      return (
+                        <div key={i} className="mono" style={{ fontSize: 10, color: oos ? 'var(--err)' : 'var(--fg-2)' }}>
+                          {oos ? '⚠ ' : '· '}{file}
+                        </div>
+                      );
+                    })}
+                    {a.payload.diff.statTail && (
+                      <pre className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', whiteSpace: 'pre-wrap', marginTop: 6, maxHeight: 120, overflowY: 'auto' }}>{a.payload.diff.statTail}</pre>
+                    )}
+                  </div>
+                )}
+                {a.payload?.claudeOutputTail && (
+                  <details style={{ marginTop: 8 }}>
+                    <summary className="mono" style={{ fontSize: 9, color: 'var(--fg-3)', letterSpacing: 1, cursor: 'pointer' }}>CLAUDE OUTPUT (tail)</summary>
+                    <pre className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', whiteSpace: 'pre-wrap', maxHeight: 200, overflowY: 'auto', marginTop: 4 }}>{a.payload.claudeOutputTail}</pre>
+                  </details>
+                )}
+                <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={() => void decide(a.id, 'approved')}
+                    disabled={decidingId !== null}
+                    className="mono"
+                    style={{
+                      padding: '6px 14px', fontSize: 11, letterSpacing: 1,
+                      color: 'var(--ok, #5fd49a)', borderColor: 'var(--ok, #5fd49a)',
+                      cursor: decidingId !== null ? 'wait' : 'pointer',
+                    }}
+                  >{decidingId === a.id ? 'DECIDING…' : 'APPROVE'}</button>
+                  <button
+                    onClick={() => void decide(a.id, 'rejected')}
+                    disabled={decidingId !== null}
+                    className="mono"
+                    style={{
+                      padding: '6px 14px', fontSize: 11, letterSpacing: 1,
+                      color: 'var(--err)', borderColor: 'var(--err)',
+                      cursor: decidingId !== null ? 'wait' : 'pointer',
+                    }}
+                  >{decidingId === a.id ? 'DECIDING…' : 'REJECT (revert files)'}</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Cycle history */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
