@@ -37,18 +37,18 @@ import { newId } from '../findings.ts';
 import { getCodeFile, query, recordCodeFileIntent } from '../memory.ts';
 import type { Agent, Finding } from '../types.ts';
 
-// Phase 4: pinned to haiku for structured extraction. The MODEL switch
-// halves the API cost per call but DOES NOT speed up wall clock —
-// measured 2026-04-27, a single haiku call still took 65s wall (9s
-// API + ~55s claude CLI bootstrap). The CLI overhead dominates every
-// call regardless of model. Real speedup would require switching to
-// the Anthropic SDK directly (queued, big refactor). Until then,
-// hold timeouts conservative + cap parallelism via per-cycle wall
-// budget. Cost optimization is still a net win: haiku is ~12× cheaper.
+// Phase 4: haiku via the Anthropic SDK path (per
+// project_claude_cli_overhead memory). The CLI's ~50s bootstrap is
+// the real bottleneck — the SDK skips it entirely (~5s typical).
+// When ANTHROPIC_API_KEY is unset we fall back to the CLI path (with
+// the slow timeout), so the agent still works on Claude-Max-only
+// installs. Per-cycle cap bumped accordingly: at ~5s/call we can
+// process many more modules per cycle.
 const MODEL = 'claude-haiku-4-5';
-const PER_CYCLE_CAP = 3;
+const PER_CYCLE_CAP = 12;
 const MAX_FILE_BYTES = 100 * 1024;       // skip files >100KB for the LLM call (token cost)
-const TIMEOUT_MS = 90_000;               // CLI bootstrap dominates — needs the full window
+const TIMEOUT_MS_API = 30_000;           // SDK path: ample headroom over 5s typical
+const TIMEOUT_MS_CLI = 90_000;           // CLI fallback: bootstrap dominates
 const SOURCE_TRUNCATE = 12_000;          // 12KB of source max — the structured intent prompt only needs the gist
 // Stop dispatching new calls once the cycle has consumed this much wall
 // clock — leaves headroom under the orchestrator's 5-min hard timeout.
@@ -199,11 +199,17 @@ export const intentExtractorAgent: Agent = {
       }
 
       try {
+        // Prefer the SDK path when API key is set — sub-5s typical
+        // round trip vs. ~65s CLI cold start. Falls back to CLI when
+        // unset; the CLI path keeps Read/Grep/Glob for free.
+        const useApi = !!process.env.ANTHROPIC_API_KEY;
         const r = await runClaude({
           prompt: buildPrompt(c, source),
-          timeoutMs: TIMEOUT_MS,
+          timeoutMs: useApi ? TIMEOUT_MS_API : TIMEOUT_MS_CLI,
           model: MODEL,
-          // Read-only — no Edit/Write needed. The intent agent never mutates user code.
+          useApi,
+          maxTokens: 1024,           // Shape A is ~150 tokens; 1024 is comfortable headroom
+          // CLI fallback: read-only — never mutates user code.
           allowedTools: ['Read', 'Grep', 'Glob'],
         });
 

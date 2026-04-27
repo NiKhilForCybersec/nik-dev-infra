@@ -7,12 +7,32 @@
  *
  * If `claude` isn't on PATH (developer hasn't installed Claude Code),
  * we surface a clear error rather than silently failing.
+ *
+ * `runClaudeAPI` is the parallel direct-SDK path (per
+ * project_claude_cli_overhead memory). High-throughput extraction
+ * agents can opt in via `useApi: true` to skip the ~50s CLI bootstrap
+ * and hit the model in ~5s. Requires ANTHROPIC_API_KEY env var; falls
+ * back to the CLI path with a clear error when missing.
  */
 
+import Anthropic from '@anthropic-ai/sdk';
 import { execa, ExecaError } from 'execa';
 import { config } from './config.ts';
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? 'claude';
+
+// Lazy-init so the daemon doesn't fail to boot when ANTHROPIC_API_KEY
+// is unset (CLI-only deployments are still fully functional).
+let sdkClient: Anthropic | null | undefined;
+function getSdk(): Anthropic | null {
+  if (sdkClient !== undefined) return sdkClient;
+  if (!process.env.ANTHROPIC_API_KEY) {
+    sdkClient = null;
+    return null;
+  }
+  sdkClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  return sdkClient;
+}
 
 /** Re-exported for back-compat; new code should read `config.targetPath`. */
 const NIK_PATH = config.targetPath;
@@ -47,6 +67,16 @@ export type ClaudeRunOptions = {
    *  high-volume extraction (intent-extractor) pin to haiku for ~3×
    *  speed + lower cost; reasoning-heavy agents leave it default. */
   model?: string;
+  /** Use the direct Anthropic SDK path instead of `claude -p`. Skips
+   *  the ~50s CLI bootstrap — sub-5s round trip on haiku. Caller must
+   *  set ANTHROPIC_API_KEY. Tools (Edit/Write/etc) are NOT available
+   *  on this path; only text in / text out. Use for high-throughput
+   *  structured extraction agents (intent-extractor, future test-
+   *  coverage LLM-fallback). */
+  useApi?: boolean;
+  /** When useApi is true, max tokens for the response. Default 2048
+   *  matches the size of structured-extraction outputs. */
+  maxTokens?: number;
 };
 
 /** Default tool whitelist passed to every claude -p call. All current
@@ -64,8 +94,12 @@ export type ClaudeRunResult = {
 };
 
 /** Run a one-shot Claude Code prompt non-interactively.
- *  Throws on timeout, non-zero exit, or claude binary missing. */
+ *  Throws on timeout, non-zero exit, or claude binary missing.
+ *  When `useApi: true`, dispatches via the Anthropic SDK instead of
+ *  spawning the CLI — sub-5s typical round trip vs. ~50s CLI cold
+ *  start. SDK path returns ONLY text; no tools available. */
 export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult> {
+  if (opts.useApi) return runClaudeAPI(opts);
   const startedAt = Date.now();
   const allowed = opts.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
   // Prepend rolling summary if the caller has one; the agent uses it as
@@ -106,6 +140,53 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
     }
     if (err.timedOut) throw new Error(`claude -p timed out after ${opts.timeoutMs ?? 90_000}ms`);
     throw new Error(`claude -p failed (exit ${err.exitCode}): ${err.stderr || err.shortMessage || err.message}`);
+  }
+}
+
+/** SDK path — direct Anthropic API call. Used by high-throughput
+ *  agents that don't need CLI tools (Read/Edit/Write/etc). Saves the
+ *  ~50s CLI bootstrap per call. */
+async function runClaudeAPI(opts: ClaudeRunOptions): Promise<ClaudeRunResult> {
+  const startedAt = Date.now();
+  const sdk = getSdk();
+  if (!sdk) {
+    throw new Error(
+      `runClaude useApi=true requires ANTHROPIC_API_KEY env var. ` +
+      `Set it or drop useApi to fall back to the CLI path.`,
+    );
+  }
+  // Default to haiku on the SDK path — same calibration as the CLI
+  // intent-extractor (haiku is comparable quality for structured
+  // extraction at ~12× lower cost).
+  const model = opts.model ?? 'claude-haiku-4-5';
+  const fullPrompt = opts.priorSummary
+    ? `## PREVIOUSLY CONCLUDED (auto-summary, may be stale — verify before relying)\n\n${opts.priorSummary}\n\n---\n\n${opts.prompt}`
+    : opts.prompt;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 60_000);
+  try {
+    const r = await sdk.messages.create({
+      model,
+      max_tokens: opts.maxTokens ?? 2048,
+      messages: [{ role: 'user', content: fullPrompt }],
+    }, { signal: ctrl.signal });
+    const text = r.content
+      .filter((c): c is Anthropic.TextBlock => c.type === 'text')
+      .map((c) => c.text)
+      .join('');
+    return {
+      text,
+      durationMs: Date.now() - startedAt,
+      usage: { input: r.usage.input_tokens, output: r.usage.output_tokens },
+    };
+  } catch (e) {
+    const err = e as Error & { status?: number; type?: string };
+    if (ctrl.signal.aborted) {
+      throw new Error(`Anthropic SDK timed out after ${opts.timeoutMs ?? 60_000}ms`);
+    }
+    throw new Error(`Anthropic SDK call failed: ${err.message}${err.status ? ` (HTTP ${err.status})` : ''}`);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
