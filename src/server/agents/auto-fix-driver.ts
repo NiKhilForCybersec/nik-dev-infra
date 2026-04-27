@@ -284,18 +284,110 @@ function isActionable(concern: Concern, brokenVerdict: CuratorVerdict | undefine
   return { actionable: true };
 }
 
+// ─── knowledge-graph grounding (per project_user_repo_knowledge_graph) ────
+//
+// When the concern targets a known file, pull whatever the codebase-graph +
+// intent-extractor have already learned about it: the file's intent
+// summary (purpose / used-by / depends-on / fragile-when), the modules it
+// imports, and the modules / packages it depends on. This 10× the
+// dispatched session's grounding compared to grepping cold.
+
+type GroundingContext = {
+  intentBlock: string | null;
+  importsBlock: string | null;
+  exportsBlock: string | null;
+  dependentsBlock: string | null;
+};
+
+function buildGrounding(fileRef: string | undefined): GroundingContext {
+  if (!fileRef) return { intentBlock: null, importsBlock: null, exportsBlock: null, dependentsBlock: null };
+  const moduleUrn = `module:${fileRef}`;
+
+  // 1. intent_summary if extracted
+  let intentBlock: string | null = null;
+  try {
+    const row = query<{ intent_summary: string | null }>(
+      `SELECT intent_summary FROM code_files WHERE path = ?`,
+      [fileRef],
+    )[0];
+    if (row?.intent_summary) {
+      try {
+        const j = JSON.parse(row.intent_summary) as { shape: string; purpose?: string; usedBy?: string; dependsOn?: string; fragileWhen?: string; deferred?: string };
+        if (j.shape === 'A' && j.purpose) {
+          intentBlock = `**Purpose:** ${j.purpose}\n**Used by:** ${j.usedBy ?? '(unknown)'}\n**Depends on:** ${j.dependsOn ?? '(unknown)'}\n**Fragile when:** ${j.fragileWhen ?? '(unknown)'}`;
+        } else if (j.shape === 'B' && j.deferred) {
+          intentBlock = `_(intent extraction deferred: ${j.deferred})_`;
+        }
+      } catch { /* malformed intent record — skip */ }
+    }
+  } catch { /* missing code_files table — skip */ }
+
+  // 2. modules + packages this file imports / depends on
+  const importsRows = query<{ object: string; predicate: string }>(
+    `SELECT object, predicate FROM facts
+       WHERE agent = 'codebase-graph' AND subject = ?
+         AND predicate IN ('imports', 'imports_dynamic', 'depends_on')
+       ORDER BY predicate, object LIMIT 30`,
+    [moduleUrn],
+  );
+  const internal = importsRows.filter((r) => r.predicate.startsWith('imports'));
+  const external = importsRows.filter((r) => r.predicate === 'depends_on');
+  const importsBlock = (internal.length || external.length)
+    ? [
+        internal.length ? `Internal modules (${internal.length}):\n${internal.slice(0, 12).map((r) => `  - ${r.object.replace(/^module:/, '')}`).join('\n')}` : null,
+        external.length ? `External packages (${external.length}):\n${external.slice(0, 12).map((r) => `  - ${r.object.replace(/^package:/, '')}`).join('\n')}` : null,
+      ].filter(Boolean).join('\n')
+    : null;
+
+  // 3. exports declared by this file (so the dispatched session knows the API surface)
+  const expRows = query<{ urn: string; kind: string; label: string }>(
+    `SELECT urn, kind, label FROM register
+       WHERE agent = 'codebase-graph' AND file = ? AND kind IN ('function', 'class')
+       ORDER BY kind, label LIMIT 30`,
+    [fileRef],
+  );
+  const exportsBlock = expRows.length
+    ? `Exports (${expRows.length}):\n${expRows.slice(0, 20).map((r) => `  - ${r.kind} ${r.label}`).join('\n')}`
+    : null;
+
+  // 4. modules in the user repo that import this file (the "blast radius" of edits here)
+  const dependentsRows = query<{ subject: string }>(
+    `SELECT DISTINCT subject FROM facts
+       WHERE agent = 'codebase-graph'
+         AND predicate IN ('imports', 'imports_dynamic')
+         AND object = ?
+       ORDER BY subject LIMIT 20`,
+    [moduleUrn],
+  );
+  const dependentsBlock = dependentsRows.length
+    ? `Dependents — modules that import this file (${dependentsRows.length}):\n${dependentsRows.slice(0, 12).map((r) => `  - ${r.subject.replace(/^module:/, '')}`).join('\n')}`
+    : null;
+
+  return { intentBlock, importsBlock, exportsBlock, dependentsBlock };
+}
+
 // ─── dispatch prompt builder ───────────────────────────────────────────────
 
 function buildPrompt(concern: Concern, brokenVerdict: CuratorVerdict | undefined): string {
   const verdictNote = brokenVerdict
     ? `The previous attempt at this concern was flagged by the dev-infra curator as **${brokenVerdict}**. Do better this time — verify the fix actually addresses the root cause, not just the symptom.`
     : `This concern has not been addressed yet.`;
+  const g = buildGrounding(concern.fileRef);
+  const groundingBlocks = [
+    g.intentBlock && `## What this file is (per dev-infra knowledge graph)\n\n${g.intentBlock}`,
+    g.exportsBlock && `## API surface\n\n${g.exportsBlock}`,
+    g.importsBlock && `## What this file uses\n\n${g.importsBlock}`,
+    g.dependentsBlock && `## Blast radius — who imports this file\n\n${g.dependentsBlock}`,
+  ].filter(Boolean);
+  const groundingSection = groundingBlocks.length > 0
+    ? `\n# Pre-loaded context (don't re-derive — verify before relying)\n\n${groundingBlocks.join('\n\n')}\n\nThis context comes from dev-infra's codebase-graph + intent-extractor agents. It's authoritative for STRUCTURE (the imports + exports are exact AST extractions) but only suggestive for INTENT (LLM summary; verify against the file before quoting it as fact). Use it to plan your edit; still read the actual file before editing.\n`
+    : '';
   return `You are working in the user's project repo. The dev-infra background system has identified this open concern from the project's \`${config.concernsFile}\`:
 
 > ${concern.text}
 
 ${verdictNote}
-
+${groundingSection}
 # CORE PRINCIPLE — HARD PATH ONLY
 
 This is the dev-infra product's main instruction hook: **no minimal performance, no minimal confidence, never the happy path.** Every step here must be 100% factual + verified before you claim it. If at any point your confidence drops below "I have evidence this is correct," stop editing and write a clarification request instead. Below 100% confidence = no edit. Better to leave the concern open with an honest note than to ship a fix that looks right but isn't.
