@@ -158,3 +158,44 @@ Auth handling: the script tolerates a missing `data/playwright-auth.json` by cli
 - Stack-agnostic by design — only the configurable globs in `dev-infra.config.json` point at the watched app
 
 See [AGENTS.md](./AGENTS.md) for the architecture + conventions when extending.
+
+## Sibling project: memnik-os
+
+[**memnik-os**](https://github.com/NiKhilForCybersec/memnik-os) is a sibling project — a local-first memory operating system for AI agents that consumes dev-infra's WebSocket finding stream as one of its sources. dev-infra observes; memnik-os remembers, with provenance and conflict surfacing.
+
+The two projects are **independent** and stay that way:
+
+- ✗ memnik-os does not modify dev-infra (their `CLAUDE.md` enforces it).
+- ✗ dev-infra does not modify memnik-os.
+- ✗ No npm cross-dependencies in either direction.
+- ✓ One-way data flow only: `dev-infra → WebSocket → memnik bridge → memnik trust spine`.
+
+The bridge lives entirely on the memnik side (`packages/server/src/integrations/dev_infra_bridge.ts` in that repo). It subscribes to `ws://127.0.0.1:5175/ws`, deduplicates by `finding.id`, and routes each Finding through memnik's `code-repo` connector — every drift / hardcoded / nav / wiring finding becomes a durable, audit-trail-bearing memory cell.
+
+### Recommended sibling layout
+
+```
+~/projects/
+├── nik-dev-infra/      # this repo — observation + agents + Concerns/Resolutions
+├── memnik-os/          # sibling — memory OS that consumes dev-infra findings
+└── nik-app/            # the watched target (or any user repo)
+```
+
+### Boot order
+
+```
+T1  ~/nik-dev-infra/   → npm start                          # daemon :5175 + UI :5174
+T2  ~/memnik-os/       → memnik start                       # bridge auto-detects + connects
+T3  ~/memnik-os/       → pnpm --filter @memnik-os/dashboard dev   # memnik UI :5173
+T4  ~/nik-app/         → claude                             # the actual dev session
+```
+
+### Verifying the integration
+
+dev-infra's side of the integration is pure HTTP/WS — no code changes are required to interoperate. To verify dev-infra is in a healthy state for memnik's bridge to consume:
+
+```bash
+./scripts/verify-memnik-integration.sh
+```
+
+Full schema contract + coordinated-evolution playbook: [docs/MEMNIK_INTEGRATION.md](./docs/MEMNIK_INTEGRATION.md).

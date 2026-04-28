@@ -1,0 +1,60 @@
+{
+  "schema_version": "2.0",
+  "observer_id": "dev-infra",
+  "suite_version": "1.0.0",
+  "ts_ms": 1777349678240,
+  "scenarios": [
+    {
+      "id": "idempotency_replay",
+      "invariant": "INV-010",
+      "passed": true,
+      "duration_ms": 57
+    },
+    {
+      "id": "urn_namespacing",
+      "invariant": "INV-011",
+      "passed": true,
+      "duration_ms": 14
+    },
+    {
+      "id": "handshake_refused",
+      "invariant": "INV-050",
+      "passed": true,
+      "duration_ms": 17
+    },
+    {
+      "id": "inference_classification",
+      "invariant": "INV-001",
+      "passed": true,
+      "duration_ms": 6
+    },
+    {
+      "id": "bearer_token_sent",
+      "invariant": "INV-070",
+      "passed": true,
+      "duration_ms": 8
+    },
+    {
+      "id": "privacy_monotonic_emission",
+      "invariant": "INV-040",
+      "passed": true,
+      "duration_ms": 9
+    },
+    {
+      "id": "heartbeats_emitted",
+      "invariant": "INV-031",
+      "passed": true,
+      "duration_ms": 361
+    },
+    {
+      "id": "reconnect_replay",
+      "invariant": "INV-022",
+      "passed": true,
+      "duration_ms": 1507
+    }
+  ],
+  "passed": 8,
+  "total": 8,
+  "passed_overall": true,
+  "report_sha": "2f70bab09dc51f35ad33bdde5294c8c3a9e720e79b436e5a802a36ca23c116c0"
+}

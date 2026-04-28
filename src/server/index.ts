@@ -9,6 +9,11 @@ import { fileURLToPath } from 'node:url';
 import { AGENTS } from './agents/index.ts';
 import { config } from './config.ts';
 import { emit, newId, onFinding, onRun, snapshot } from './findings.ts';
+import {
+  getMemnikObserver,
+  memnikPushStatus,
+  pushFindingToMemnik,
+} from './integrations/memnik_observer.ts';
 import { decideApproval, entities, factsByPredicate, getApproval, getPhase, listApprovals, listHooks, listSegments, memoryStats, query, recallAll, wikiHistory, wikiList, wikiRead } from './memory.ts';
 import { startOrchestrator, triggerAgent } from './orchestrator.ts';
 import type { Finding, ServerEvent } from './types.ts';
@@ -97,6 +102,14 @@ app.get('/api/snapshot', async () => {
     phase: getPhase(),
     completeness: latestCompleteness(),
   };
+});
+
+// REST: memnik-os observer push status (diagnostic only).
+// Reports whether the DEV_INFRA_MEMNIK_PUSH gate is on, whether the
+// observer is connected, and the local spool depth. Does NOT expose
+// the bearer token. Useful for ./scripts/verify-memnik-integration.sh.
+app.get('/api/memnik/status', async () => {
+  return memnikPushStatus();
 });
 
 // REST: persistent memory stats + recent activity per agent.
@@ -893,6 +906,37 @@ app.register(async (instance) => {
 
 await app.listen({ port: PORT, host: HOST });
 console.log(`[server] daemon listening on http://${HOST}:${PORT}`);
+
+// memnik-os observer push: subscribe to every emitted finding and
+// fire-and-forget into memnik via @memnik-os/observer-sdk. The push
+// is a no-op unless DEV_INFRA_MEMNIK_PUSH is truthy (default off);
+// when on, failures are caught + spooled by the SDK for replay on
+// reconnect — a memnik outage never affects dev-infra. This listener
+// runs alongside the WS broadcast (per-client onFinding registered
+// inside the /ws handler) — neither is impacted by the other.
+//
+// Eager-connect: bootstrap the Observer + attempt WS handshake BEFORE
+// the orchestrator starts. This dodges the boot-load race (35 agents
+// firing at once would otherwise time out the 10 s handshake window).
+//
+// CRITICAL: the listener registers UNCONDITIONALLY when push is
+// enabled — even if the eager handshake fails. The SDK's reconnect-
+// with-backoff loop owns recovery; emit() routes envelopes to a local
+// spool while disconnected and replays on reconnect. Latching push off
+// when the eager handshake fails would leave the daemon in a broken
+// state for the rest of its lifetime if memnik happened to be down at
+// boot — the opposite of the SDK's resilience design.
+const memnikStatus = memnikPushStatus();
+if (memnikStatus.enabled) {
+  console.log(`[memnik-observer] push ENABLED → ${memnikStatus.url}`);
+  // Trigger eager bootstrap; do not block on it.
+  void getMemnikObserver();
+  onFinding((finding) => {
+    void pushFindingToMemnik(finding, { repo: config.targetLabel });
+  });
+} else {
+  console.log('[memnik-observer] push disabled (set DEV_INFRA_MEMNIK_PUSH=1 to enable)');
+}
 
 // Start the agent orchestrator AFTER the server is up so the very
 // first findings are broadcastable.

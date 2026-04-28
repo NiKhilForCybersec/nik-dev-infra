@@ -16,13 +16,15 @@
     "init": "node scripts/init.mjs",
     "mcp": "tsx src/server/mcp-server/server.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "compliance": "node ../nik-memory-os/packages/observer-compliance/dist/cli.js run --observer-cmd \"npx tsx scripts/compliance-observer.mts\" --observer-id dev-infra --report ./compliance-reports/dev-infra.json"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",
     "@fastify/cors": "^10.0.2",
     "@fastify/static": "^8.0.4",
     "@fastify/websocket": "^11.0.2",
+    "@memnik-os/observer-sdk": "file:../nik-memory-os/packages/observer-sdk",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^12.9.0",
     "chokidar": "^4.0.3",
